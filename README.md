@@ -10,7 +10,7 @@ A self-hosted price monitor for a small homelab. Python 3.12+, FastAPI, SQLite, 
 - Product editing, pause/resume, individual listing controls, per-product/global checks, and removal to a recoverable archive.
 - Scheduled checks, change-based history with daily samples, Chart.js series/ranges, threshold/availability/discovery events, read state, and durable ntfy delivery retries.
 - Global/per-store polling, allowed conditions, request settings, proxy and optional browser fallback through the UI.
-- Local frontend assets, SQLite migrations, structured logs, systemd deployment, online backups, and fixture-backed tests.
+- Local frontend assets, SQLite migrations, structured logs, Docker Compose deployment, online backups, and fixture-backed tests.
 
 ## Retailer coverage
 
@@ -26,19 +26,111 @@ Live checks were made on 2026-10-06. These are implementation/validation results
 
 Missing conditions are **unknown**, never assumed new. Allow unknown in an individual product's settings only if you want its offers included in price alerts. Retailer settings expose capabilities and recent failures. A blocked adapter does not stop the others.
 
-## Run locally
+## Quick start: Docker Compose
+
+The host needs Docker Engine and Docker Compose v2. Python, pip, Chromium, Playwright, migration tooling, and the web server are included in the image. No `.env` file or manual database command is required.
 
 ```bash
-python3 --version  # 3.12 or newer
-python3 -m venv .venv
+git clone https://github.com/m0nte1ro/pricewatch.git
+cd pricewatch
+docker compose up -d --build
+```
+
+Open **http://SERVER_IP:8080**. On first start Compose creates `./data`, the entrypoint prepares its permissions, runs migrations, and starts the scheduler and web UI. The first image build downloads Chromium and its system libraries; later builds reuse cached dependency layers.
+
+The entrypoint briefly runs as root to handle a newly created bind directory, then drops to the dedicated `pricewatch` user (UID/GID 10001) before migrations and the application. The application image is read-only at runtime; writable locations are the data mount and temporary browser directories. One container exposes only port 8080. It uses Docker's `unless-stopped` restart policy and does not require an application systemd service, host networking, privileged mode, or a Docker socket mount.
+
+Use **one worker and one application instance per database**. The scheduler, task locks, and retailer rate limiter live inside this process. The app assumes a trusted LAN; no signup is required.
+
+## Operate, inspect health, and upgrade
+
+```bash
+docker compose ps
+docker compose logs -f pricewatch
+docker compose restart
+docker compose down
+docker compose up -d
+```
+
+`docker compose ps` shows container health. The healthcheck calls `/health`, which checks the application and database without contacting a retailer. To inspect its latest probe results:
+
+```bash
+docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q pricewatch)"
+```
+
+Upgrade from the repository directory:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+The replacement container uses the same database, history, settings, and alert records. Migrations run automatically before each server start. Migration failure prevents the server from starting; inspect `docker compose logs pricewatch` before trying again. Take a backup before upgrading. Configuration edited through the Web UI is stored in SQLite and survives upgrades.
+
+## Persistence, backup, and restore
+
+Compose bind-mounts **`./data:/var/lib/pricewatch`**. The database is `./data/pricewatch.db` on the host and `/var/lib/pricewatch/pricewatch.db` in the container. Its SQLite WAL/SHM files and any backups are also inside this data directory. SQLite already uses WAL mode, a 30-second busy timeout, and foreign keys.
+
+Restarting, stopping, running `docker compose down`, replacing a container, or rebuilding the image does **not** remove this bind directory. **Deleting `./data` deletes your persistent application state.** Do not change the bind source during an upgrade. The directory and database are owned by container UID/GID 10001 with restrictive permissions; use container commands or an appropriate host administrator account to access them.
+
+Create a consistent backup while the app is running using the existing SQLite backup API:
+
+```bash
+docker compose exec --user pricewatch pricewatch mkdir -p /var/lib/pricewatch/backups
+docker compose exec --user pricewatch pricewatch python scripts/backup.py \
+  /var/lib/pricewatch/pricewatch.db \
+  "/var/lib/pricewatch/backups/pricewatch-$(date +%Y%m%d-%H%M%S).db"
+```
+
+The result is visible under `./data/backups`. Keep a copy outside the deployment machine. The database contains settings and optional notification credentials. Copying only a live `.db` file can miss transactions still in WAL, so use this backup command or stop the app before copying.
+
+To restore, stop the app and use the same image to move the current database and WAL/SHM files aside before copying the chosen backup. Replace the example backup name with one created above:
+
+```bash
+docker compose down
+docker compose run --rm --no-deps --entrypoint sh pricewatch -ec '
+  test -f /var/lib/pricewatch/backups/CHOSEN-BACKUP.db
+  saved="/var/lib/pricewatch/pre-restore-$(date +%Y%m%d-%H%M%S)"
+  mkdir -m 700 "$saved"
+  for file in /var/lib/pricewatch/pricewatch.db /var/lib/pricewatch/pricewatch.db-wal /var/lib/pricewatch/pricewatch.db-shm; do
+    if [ -f "$file" ]; then mv "$file" "$saved/"; fi
+  done
+  cp /var/lib/pricewatch/backups/CHOSEN-BACKUP.db /var/lib/pricewatch/pricewatch.db
+  chown pricewatch:pricewatch /var/lib/pricewatch/pricewatch.db
+  chmod 600 /var/lib/pricewatch/pricewatch.db
+'
+docker compose up -d
+```
+
+The old files are retained in `pre-restore-*` for rollback. Migrations run against the restored database on startup. A backup from a newer schema may require its matching application version.
+
+## Browser fallback
+
+The standard image includes pinned Playwright and its matching **Chromium headless shell**, including Linux libraries. No browser software is needed on the host. Other browser engines are omitted to keep the image smaller.
+
+HTTP remains the default. Enable **browser fallback** in the Web UI's Settings only when a retailer requires JavaScript. The existing fallback is serialized, blocks off-domain requests, and stops on CAPTCHA/human-verification challenges. Installing Chromium does not bypass blocked retailers or make partial adapters fully supported. Browser binaries belong to the image, while durable application state belongs to `./data`.
+
+## Troubleshooting
+
+- **Port 8080 already in use:** stop the other listener or change only the host side of the port mapping in a local Compose override.
+- **Unhealthy or restarting:** inspect `docker compose logs pricewatch` and the healthcheck output above. Database/migration failures are fatal rather than ignored.
+- **Bind directory not writable:** the default entrypoint fixes permissions. On NFS/root-squash or with a custom Compose `user`, ensure the data directory is writable by UID/GID 10001. Do not delete it to solve a permission error.
+- **Browser launch fails:** rebuild the image and inspect logs. Playwright and its browser revision are installed together; the container does not use host browser installations.
+- **Retailer returns 403/429:** the existing one-hour cooldown applies; other stores continue. See Retailer coverage below.
+- **LXC deployment:** install Docker/Compose in an LXC configured to support containers. The application itself needs no additional host Python/browser packages.
+
+## Native development and legacy deployment
+
+Developers can still run the existing Python workflow:
+
+```bash
+python3 -m venv .venv  # Python 3.12+
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m app.migrate
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1
 ```
 
-Open `http://localhost:8080`. Add a product, review the discovery results, and confirm. Configure notifications and defaults under Settings. No account is required. The default local database is `data/pricewatch.db`.
-
-Use **one worker and one application instance per database**. Its scheduler, task locks, and retailer rate limiter live inside that process. This is intentional for the target 1–2 CPU / 1–2 GB LXC. The application is designed for a trusted LAN; put authentication at your reverse proxy before exposing it elsewhere.
+This local development mode defaults to `data/pricewatch.db`. Existing native Debian/systemd installations can use the [alternative deployment guide](deploy/README.systemd.md); systemd is not part of the recommended Docker installation.
 
 ## Architecture
 
@@ -55,6 +147,7 @@ app/
   runtime.py      Dependency wiring, bounded jobs and scheduler lifecycle
   database.py     Sessions and SQLite WAL / foreign key configuration
 migrations/       Versioned Alembic schema
+deploy/           Container entrypoint and legacy systemd alternative
 scripts/          Backup utility
 tests/           Domain, integration, transport and web tests; HTML fixtures
 ```
@@ -94,11 +187,11 @@ Removing a product archives it and stops checks without deleting history. Disabl
 
 ## Configuration and ntfy
 
-Environment variables are prefixed `PRICEWATCH_`; see [.env.example](.env.example). Locally, `.env` is loaded if present. The systemd unit reads `/etc/pricewatch/pricewatch.env`.
+All retailer, polling, condition and ntfy settings can be configured through the Web UI. Environment variables are prefixed `PRICEWATCH_`; see [.env.example](.env.example). Compose passes optional logging/scheduler overrides from `.env` if present; copying that file is optional. It fixes the data directory at `/var/lib/pricewatch`. Other application environment overrides can be added explicitly in a local Compose override. Native development still loads `.env` directly.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PRICEWATCH_DATA_DIR` | `data` | SQLite directory |
+| `PRICEWATCH_DATA_DIR` | `/var/lib/pricewatch` in Docker; `data` natively | SQLite directory; keep the Compose data mount |
 | `PRICEWATCH_DATABASE_URL` | derived from data directory | Optional SQLite URL |
 | `PRICEWATCH_SCHEDULER_ENABLED` | `true` | Disable only for tests/manual-only usage |
 | `PRICEWATCH_LOG_LEVEL` | `INFO` | Structured log level |
@@ -108,89 +201,6 @@ Retailer settings, allowed conditions, intervals, HTTP settings, and ntfy are st
 For ntfy, set the server's root URL (for example `https://ntfy.sh` or your LAN ntfy instance), a topic, and optionally a bearer token. Subscribe to that topic using your ntfy client. Messages use ntfy's JSON publishing API; insane-deal events use priority 5. See the [ntfy publishing reference](https://docs.ntfy.sh/publish/).
 
 Events are saved before notification delivery. Failed deliveries retry five times with increasing delays; failures and manual retry are visible in Activity. Delivery is at least once: a process crash after sending but before saving success can duplicate a notification. If ntfy is disabled, events remain in the UI with delivery state `skipped` and can be retried later.
-
-## Debian LXC deployment
-
-Use a Debian 13 LXC for the commands below; its Python 3.13 satisfies the application's requirement. Debian 12's default Python 3.11 does not. See [Debian's Python package](https://packages.debian.org/trixie/python3.13).
-
-Run these commands **inside the LXC, from the checked-out repository**. They install the application under `/opt/pricewatch`, configuration under `/etc/pricewatch`, and data under `/var/lib/pricewatch`.
-
-```bash
-sudo apt-get update
-sudo apt-get install -y python3 python3-venv rsync sqlite3 ca-certificates
-python3 -c 'import sys; assert sys.version_info >= (3, 12), "Python 3.12+ required"'
-sudo useradd --system --user-group --home-dir /var/lib/pricewatch \
-  --shell /usr/sbin/nologin pricewatch
-sudo install -d -m 0755 /opt/pricewatch
-sudo install -d -m 0750 -o root -g pricewatch /etc/pricewatch
-sudo install -d -m 0700 -o pricewatch -g pricewatch /var/lib/pricewatch
-sudo rsync -a --exclude='.git' --exclude='.venv' --exclude='data' \
-  --exclude='.env' --exclude='.agents' --exclude='.codex' --exclude='.aws' \
-  --exclude='__pycache__' --exclude='.pytest_cache' --exclude='.ruff_cache' \
-  ./ /opt/pricewatch/
-sudo chown -R root:root /opt/pricewatch
-sudo python3 -m venv /opt/pricewatch/.venv
-sudo /opt/pricewatch/.venv/bin/pip install -r /opt/pricewatch/requirements.lock
-sudo /opt/pricewatch/.venv/bin/pip install --no-deps /opt/pricewatch
-sudo install -m 0640 -o root -g pricewatch /opt/pricewatch/.env.example \
-  /etc/pricewatch/pricewatch.env
-sudo install -m 0644 /opt/pricewatch/deploy/pricewatch.service \
-  /etc/systemd/system/pricewatch.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now pricewatch
-sudo systemctl status pricewatch --no-pager
-curl --fail http://127.0.0.1:8080/health
-```
-
-The service runs migrations before starting, as the unprivileged `pricewatch` user. It binds `0.0.0.0:8080`. Open `http://LXC_IP:8080` on your LAN. The service has a read-only system filesystem except its state directory, private temporary directory and restrictive file permissions. If the user already exists, skip `useradd`.
-
-```bash
-sudo journalctl -u pricewatch -f
-sudo systemctl restart pricewatch
-```
-
-Before upgrades, take a backup, stop the service, update application code/dependencies, and restart. Do not overwrite `/etc/pricewatch/pricewatch.env` or `/var/lib/pricewatch` on upgrades. Schema upgrades run automatically at service start. There is no Docker or Kubernetes requirement.
-
-### Optional Playwright
-
-Normal HTTP is preferred. Enable browser rendering only when a specific retailer needs it. Browser fallback is serialized, blocks off-domain requests, and stops on human-verification challenges. It uses more memory than HTTP parsing.
-
-```bash
-sudo /opt/pricewatch/.venv/bin/pip install '/opt/pricewatch[browser]'
-sudo /opt/pricewatch/.venv/bin/python -m playwright install-deps chromium
-sudo -u pricewatch env PLAYWRIGHT_BROWSERS_PATH=/var/lib/pricewatch/browsers \
-  /opt/pricewatch/.venv/bin/python -m playwright install chromium
-sudo systemctl restart pricewatch
-```
-
-Then enable the browser fallback in Settings. For local development use `.venv/bin/pip install -e '.[browser]'` and `.venv/bin/python -m playwright install chromium`. Browser installation details: [Playwright browser documentation](https://playwright.dev/python/docs/browsers).
-
-## Back up and restore
-
-Use SQLite's backup API while the service is running. Copying only the `.db` file while WAL is active can lose recent transactions.
-
-```bash
-sudo install -d -m 0700 -o pricewatch -g pricewatch /var/lib/pricewatch/backups
-sudo -u pricewatch /opt/pricewatch/.venv/bin/python /opt/pricewatch/scripts/backup.py \
-  /var/lib/pricewatch/pricewatch.db \
-  /var/lib/pricewatch/backups/pricewatch-$(date +%Y%m%d-%H%M%S).db
-```
-
-Keep backups outside the LXC too. Store `/etc/pricewatch/pricewatch.env` securely with the database backup. To restore a chosen backup, stop the service first and move the current database plus its WAL/SHM files out of the way (keep them for rollback):
-
-```bash
-sudo systemctl stop pricewatch
-pricewatch_restore_dir="/var/lib/pricewatch/pre-restore-$(date +%Y%m%d-%H%M%S)"
-sudo install -d -m 0700 "$pricewatch_restore_dir"
-for pricewatch_file in /var/lib/pricewatch/pricewatch.db /var/lib/pricewatch/pricewatch.db-wal /var/lib/pricewatch/pricewatch.db-shm; do
-  if sudo test -f "$pricewatch_file"; then
-    sudo mv "$pricewatch_file" "$pricewatch_restore_dir/"
-  fi
-done
-sudo install -m 0600 -o pricewatch -g pricewatch /path/to/chosen-backup.db \
-  /var/lib/pricewatch/pricewatch.db
-sudo systemctl start pricewatch
-```
 
 ## Extending the application
 
@@ -205,6 +215,18 @@ sudo systemctl start pricewatch
 For another notification destination, implement the `NotificationProvider.send` contract and wire the provider factory through `NotificationService`. For richer categories, extend identity extraction and fixtures, keeping conflicting identifiers authoritative. Add schema changes with `alembic revision --autogenerate -m 'description'`, inspect the migration, and apply it with `python -m app.migrate`.
 
 ## Validation
+
+Check the deployment using only Docker:
+
+```bash
+docker compose build --no-cache --pull
+docker compose up -d --build
+docker compose ps
+docker compose exec --user pricewatch pricewatch python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())"
+```
+
+The following commands are for contributors running the Python test suite; they are not deployment prerequisites. Container startup tests check migration ordering and ensure a migration error prevents server startup.
 
 ```bash
 .venv/bin/pip install -e '.[dev]'

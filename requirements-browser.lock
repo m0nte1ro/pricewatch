@@ -1,0 +1,4 @@
+# Container runtime plus the optional browser fallback; pinned to its browser revision.
+-r requirements.lock
+playwright==1.63.0
+pyee==13.0.1

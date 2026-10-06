@@ -1,3 +1,4 @@
+# Legacy native deployment only; Docker Compose is the recommended installation.
 [Unit]
 Description=Pricewatch homelab price monitor
 Wants=network-online.target

@@ -1,0 +1,116 @@
+import logging
+import random
+from datetime import timedelta
+
+from sqlalchemy import select
+
+from app.models import Listing, PriceHistory, Product
+from app.schemas.domain import Candidate, Preferences, Snapshot, now
+from app.services.alerts import evaluate
+from app.services.matching import normalize
+
+log = logging.getLogger(__name__)
+
+
+def record_snapshot(
+    session, product: Product, listing: Listing, snapshot: Snapshot, *, initial: bool = False
+):
+    evaluate(session, product, listing, snapshot, initial=initial)
+    latest = session.scalar(
+        select(PriceHistory)
+        .where(PriceHistory.listing_id == listing.id)
+        .order_by(PriceHistory.timestamp.desc())
+        .limit(1)
+    )
+    changed = not latest or (
+        latest.price,
+        latest.availability,
+        latest.condition,
+        latest.currency,
+    ) != (snapshot.price, snapshot.availability, str(snapshot.condition), snapshot.currency)
+    if changed or latest.timestamp <= snapshot.observed_at - timedelta(hours=24):
+        session.add(
+            PriceHistory(
+                listing_id=listing.id,
+                timestamp=snapshot.observed_at,
+                price=snapshot.price,
+                availability=snapshot.availability,
+                condition=str(snapshot.condition),
+                currency=snapshot.currency,
+            )
+        )
+    if listing.current_price != snapshot.price:
+        listing.previous_price = listing.current_price
+        log.info("price_changed", extra={"listing_id": listing.id})
+    listing.current_price = snapshot.price
+    listing.original_price = snapshot.original_price
+    listing.currency = snapshot.currency
+    listing.availability = snapshot.availability
+    listing.title = snapshot.title
+    listing.last_seen_at = snapshot.observed_at
+    listing.last_checked_at = now()
+    listing.last_error = None
+
+
+def add_candidates(
+    session, product: Product, candidates: list[Candidate], preferences: Preferences | None = None
+) -> int:
+    added = 0
+    for candidate in candidates:
+        snapshot = candidate.listing
+        rows = session.scalars(
+            select(Listing).where(
+                Listing.retailer == snapshot.retailer,
+                Listing.condition == str(snapshot.condition),
+                Listing.seller_key == normalize(snapshot.seller),
+            )
+        ).all()
+        duplicate = next(
+            (
+                row
+                for row in rows
+                if (
+                    row.url == snapshot.url
+                    or (
+                        snapshot.retailer_product_id
+                        and row.retailer_product_id == snapshot.retailer_product_id
+                    )
+                    or (
+                        not (row.retailer_product_id and snapshot.retailer_product_id)
+                        and row.product_id == product.id
+                        and normalize(row.title) == normalize(snapshot.title)
+                        and candidate.match.level in ("EXACT", "HIGH")
+                    )
+                )
+            ),
+            None,
+        )
+        if duplicate:
+            if duplicate.product_id != product.id:
+                raise ValueError("A selected listing is already monitored under another product")
+            duplicate.sources = sorted(set(duplicate.sources + candidate.sources))
+            continue
+        listing = Listing(
+            product_id=product.id,
+            retailer=snapshot.retailer,
+            url=snapshot.url,
+            retailer_product_id=snapshot.retailer_product_id,
+            title=snapshot.title,
+            condition=str(snapshot.condition),
+            seller=snapshot.seller,
+            seller_key=normalize(snapshot.seller),
+            sources=candidate.sources,
+            currency=snapshot.currency,
+            availability="unknown",
+        )
+        session.add(listing)
+        session.flush()
+        record_snapshot(session, product, listing, snapshot, initial=True)
+        interval = (
+            preferences.retailer_intervals.get(snapshot.retailer, preferences.polling_minutes)
+            if preferences
+            else 60
+        )
+        listing.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
+        added += 1
+    return added

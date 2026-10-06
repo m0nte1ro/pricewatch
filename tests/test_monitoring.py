@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.models import Alert, Listing, PriceHistory, Product
 from app.schemas.domain import now
 from app.services.listings import add_candidates, record_snapshot
-from app.services.queries import QueryService
+from app.services.queries import QueryService, summary
 
 
 def create_product(db, candidate, conditions=None):
@@ -137,3 +137,28 @@ async def test_scheduled_due_check_and_blocked_retailer_isolation(site):
         assert rows["fnac"].next_check_at > now()
         assert session.scalar(select(func.count()).select_from(PriceHistory)) == 6
     assert "insane_deal" in events(runtime.db)
+
+
+def test_out_of_stock_deal_price_is_recorded_but_never_alerts(db, candidate):
+    candidate.listing.condition = "outlet_grade_a"
+    candidate.listing.price = Decimal("783.57")
+    candidate.listing.availability = "out_of_stock"
+    product_id = create_product(db, candidate, conditions=["new", "outlet_grade_a"])
+    assert events(db) == ["outlet_listing"]
+    with db.session() as session:
+        product = session.get(Product, product_id)
+        item = summary(product)
+        assert item["status"] == "OUT OF STOCK"
+        assert item["best"] is None
+        assert item["unavailable"].current_price == Decimal("783.57")
+        history = session.scalar(select(PriceHistory))
+        assert (history.price, history.availability) == (Decimal("783.57"), "out_of_stock")
+    # Back in stock at the same price: now it is a real deal.
+    snapshot = candidate.listing.model_copy(update={"availability": "in_stock"})
+    update(db, snapshot)
+    assert events(db) == [
+        "outlet_listing",
+        "became_available",
+        "target_hit",
+        "insane_deal",
+    ]

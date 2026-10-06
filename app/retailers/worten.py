@@ -1,8 +1,11 @@
 import json
 from urllib.parse import urljoin
 
+from bs4 import BeautifulSoup
+
 from app.retailers.base import RetailerAdapter
 from app.retailers.parsing import ScrapeError
+from app.schemas.domain import Snapshot
 from app.services.matching import normalize
 
 
@@ -17,6 +20,19 @@ class WortenAdapter(RetailerAdapter):
     seller_selector = ".product-price-info__seller__name"
     condition_selector = ".product-condition, .outlet-grade, [data-condition]"
     original_selector = ".price__old, .product-price__old, del[itemprop='price']"
+
+    def parse(self, html: str, url: str) -> list[Snapshot]:
+        snapshots = super().parse(html, url)
+        # Worten's JSON-LD keeps saying InStock for listings that cannot be bought; the
+        # server-rendered buy box is authoritative ("--unavailability", no cart button).
+        box = BeautifulSoup(html, "html.parser").select_one(".add-to-cart--buy-box")
+        if box is not None:
+            buyable = "add-to-cart--unavailability" not in box.get("class", []) and box.select_one(
+                "button"
+            )
+            for snapshot in snapshots:
+                snapshot.availability = "in_stock" if buyable else "out_of_stock"
+        return snapshots
 
     def api_search_links(self, payload: dict, identity) -> list[str]:
         items = (

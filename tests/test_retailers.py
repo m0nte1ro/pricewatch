@@ -225,3 +225,25 @@ def test_amazon_third_party_seller_condition_stays_unknown(registry):
     html = AMAZON_BUY_BOX.format(seller="MK TRADE SIA")
     listing = registry.adapters["amazon_es"].parse(html, "https://www.amazon.es/dp/B0GVT5HYB3")[0]
     assert (listing.seller, listing.condition) == ("MK TRADE SIA", "unknown")
+
+
+def test_worten_buy_box_overrides_stale_in_stock_json_ld(registry):
+    # Live page: JSON-LD says InStock, but the buy box offers only "Acompanhar disponibilidade".
+    listing = registry.adapters["worten"].parse(
+        (FIXTURES / "worten_outlet_unavailable_live.html").read_text(),
+        "https://www.worten.pt/produtos/tv-tcl-85c7k-outlet-grade-a-miniled-85-216-cm-4k-ultra-hd-smart-tv-8751314",
+    )[0]
+    assert listing.price == Decimal("783.57")
+    assert listing.condition == "outlet_grade_a"
+    assert listing.availability == "out_of_stock"
+
+
+def test_worten_buy_box_with_cart_button_is_in_stock(registry):
+    html = (
+        (FIXTURES / "worten_outlet_unavailable_live.html")
+        .read_text()
+        .replace(" add-to-cart--unavailability", "")
+        .replace("<!--[--><!-- --><!--]-->", "<button>Adicionar ao carrinho</button>")
+    )
+    listing = registry.adapters["worten"].parse(html, URLS["worten"])[0]
+    assert listing.availability == "in_stock"

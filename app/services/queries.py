@@ -19,6 +19,19 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
         and not x.last_error
     ]
     best = min(eligible, key=lambda x: x.current_price, default=None)
+    # Shown when nothing is buyable: the price is still recorded, but clearly not a deal.
+    unavailable = min(
+        (
+            x
+            for x in active
+            if x.current_price is not None
+            and x.currency == "EUR"
+            and x.availability != "in_stock"
+            and x.condition in product.allowed_conditions
+        ),
+        key=lambda x: x.current_price,
+        default=None,
+    )
     status = "WATCHING"
     if active and all(x.availability == "out_of_stock" and not x.last_error for x in active):
         status = "OUT OF STOCK"
@@ -33,6 +46,7 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
     return {
         "product": product,
         "best": best,
+        "unavailable": None if best else unavailable,
         "low": low,
         "status": status,
         "active_count": len(active),

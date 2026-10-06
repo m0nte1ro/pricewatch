@@ -1,0 +1,3 @@
+<div id="check-status" class="muted" role="status" {% if monitor.lock.locked() or queued %}hx-get="/checks/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{% if monitor.lock.locked() or queued %}<span class="spinner"></span> Checking prices…{% else %}{{ monitor.last_summary }}{% if monitor.last_run %} · {{ monitor.last_run|date }} · <a href="{{ request.headers.get('referer', '/') if request.headers.get('referer', '').startswith('/') else '/' }}">Reload prices</a>{% endif %}{% endif %}
+</div>

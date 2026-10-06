@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Pricewatch{% endblock %}</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<aside class="sidebar">
+  <a class="brand" href="/"><img src="/static/icon.svg" width="30" height="30" alt="">pricewatch<span class="brand-dot">.</span></a>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Main navigation">
+    <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}"><span>▦</span>Watchlist</a>
+    <a href="/products/new" class="{{ 'active' if request.url.path == '/products/new' else '' }}"><span>+</span>Add product</a>
+    <a href="/alerts" class="{{ 'active' if request.url.path == '/alerts' else '' }}"><span>◉</span>Activity</a>
+    <a href="/settings" class="{{ 'active' if request.url.path == '/settings' else '' }}"><span>⚙</span>Settings</a>
+  </nav>
+  <div class="sidebar-bottom"><span class="live-dot"></span> Self-hosted <span class="muted">/ v0.1</span><p>Your prices. Your homelab.</p></div>
+</aside>
+<main id="main">
+  <div class="topbar"><span>PERSONAL PRICE MONITOR</span><a href="/settings">PT / ES retailers <span class="live-dot"></span></a></div>
+  {% block content %}{% endblock %}
+  <footer>PRICEWATCH <span>All times UTC · Prices exclude delivery unless included by the retailer.</span></footer>
+</main>
+</body>
+</html>

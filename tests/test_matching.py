@@ -1,0 +1,78 @@
+import pytest
+
+from app.schemas.domain import Identity
+from app.services.matching import deduplicate, identify, match_identity
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "TCL 85C7K",
+        "TCL 85 C7K",
+        'TCL TV MiniLED 85C7K 85"',
+        "Televisor TCL 85C7K Mini LED 85 polegadas",
+    ],
+)
+def test_tv_normalization(title):
+    identity = identify(title)
+    assert (identity.brand, identity.model, identity.size, identity.category) == (
+        "TCL",
+        "85C7K",
+        "85",
+        "tv",
+    )
+
+
+@pytest.mark.parametrize("other", ["TCL 85C8K", "TCL 75C7K", "SAMSUNG 85C7K", "TCL 85C7K PRO"])
+def test_never_merge_conflicting_models(other):
+    assert match_identity(identify("TCL 85C7K"), identify(other)).level == "CONFLICT"
+
+
+def test_title_only_requires_review():
+    assert (
+        match_identity(identify("A beautiful television"), identify("A beautiful television")).level
+        == "LOW"
+    )
+
+
+def test_identifier_match_and_conflict():
+    a = Identity(name="Monitor", identifiers={"gtin13": "123"})
+    b = Identity(name="A monitor", identifiers={"gtin13": "123"})
+    assert match_identity(a, b).level == "HIGH"
+    b.identifiers = {"gtin13": "456"}
+    assert match_identity(a, b).level == "CONFLICT"
+
+
+def test_additive_deduplication(candidate):
+    auto = candidate.model_copy(deep=True)
+    auto.sources = ["discovered"]
+    auto.listing.url += "?irrelevant=1"
+    result = deduplicate([candidate, auto])
+    assert len(result) == 1
+    assert result[0].sources == ["discovered", "manual"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("condition", "outlet_grade_a"), ("seller", "Other store"), ("retailer_product_id", "999")],
+)
+def test_separate_offers_remain_separate(candidate, field, value):
+    other = candidate.model_copy(deep=True)
+    setattr(other.listing, field, value)
+    if field == "retailer_product_id":
+        other.listing.url += "?offer=other"
+    assert len(deduplicate([candidate, other])) == 2
+
+
+def test_title_model_fallback_without_ids(candidate):
+    other = candidate.model_copy(deep=True)
+    candidate.listing.retailer_product_id = None
+    other.listing.retailer_product_id = None
+    other.listing.url += "?variant=1"
+    assert len(deduplicate([candidate, other])) == 1
+
+
+def test_same_canonical_url_with_changed_id_does_not_duplicate(candidate):
+    other = candidate.model_copy(deep=True)
+    other.listing.retailer_product_id = "changed"
+    assert len(deduplicate([candidate, other])) == 1

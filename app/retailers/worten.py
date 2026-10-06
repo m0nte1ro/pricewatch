@@ -50,15 +50,13 @@ class WortenAdapter(RetailerAdapter):
                 links.append(url)
         return list(dict.fromkeys(links))[:4]
 
-    async def search_product(self, identity) -> list[str]:
-        # This is the public search endpoint used by Worten's own storefront. "Brand model"
-        # queries sometimes hit a broad reranked index that pages the exact model out of view;
-        # the bare model number returns it consistently.
+    async def search_term(self, term: str, identity) -> list[str]:
+        # This is the public search endpoint used by Worten's own storefront.
         raw = await self.fetcher.get(
             "https://www.worten.pt/worten-api/search-products",
             self.name,
             self.hosts,
-            json_body={"query": identity.model or identity.name, "params": {}},
+            json_body={"query": term, "params": {}},
         )
         try:
             payload = json.loads(raw)

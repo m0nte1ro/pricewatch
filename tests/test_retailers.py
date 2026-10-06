@@ -22,7 +22,7 @@ def test_worten_actual_html(registry):
     assert listing.price == Decimal("1199.00")
     assert listing.seller == "Worten"
     assert listing.identity.model == "85C7K"
-    assert listing.identity.identifiers["gtin13"] == "5901292525712"
+    assert listing.identity.identifiers["gtin"] == "5901292525712"
     assert listing.availability == "in_stock"
     assert listing.condition == "new"
 
@@ -247,3 +247,65 @@ def test_worten_buy_box_with_cart_button_is_in_stock(registry):
     )
     listing = registry.adapters["worten"].parse(html, URLS["worten"])[0]
     assert listing.availability == "in_stock"
+
+
+def test_darty_out_of_stock_live_page(registry):
+    listing = registry.adapters["darty"].parse(
+        (FIXTURES / "darty_85c7k_out_of_stock_live.html").read_text(),
+        "https://www.darty.pt/products/tcl-tv-mini-led-85c7k-4k-216cm",
+    )[0]
+    assert listing.price == Decimal("2099.99")
+    assert listing.availability == "out_of_stock"
+    assert listing.identity.model == "85C7K"
+    # Darty labels the EAN "gtin", Worten "gtin13": both normalize to the same identifier.
+    assert listing.identity.identifiers["gtin"] == "5901292525712"
+
+
+@pytest.mark.parametrize(
+    "data,expected",
+    [
+        ({"gtin13": "5901292525712"}, "5901292525712"),
+        ({"gtin": "5901292525712"}, "5901292525712"),
+        ({"gtin14": "05901292525712"}, "5901292525712"),
+        ({"gtin12": "190198066474"}, "0190198066474"),
+        ({"gtin": "n/a"}, None),
+    ],
+)
+def test_gtin_normalization(registry, data, expected):
+    identity = registry.adapters["darty"].extract_product_identity(data, "TCL 85C7K")
+    assert identity.identifiers.get("gtin") == expected
+
+
+class TermFetcher:
+    """Answers Darty's suggest endpoint per query, like the live store does."""
+
+    validate_url = staticmethod(Fetcher.validate_url)
+
+    def __init__(self, results):
+        self.results, self.queries = results, []
+
+    async def get(self, url, retailer, hosts, **kwargs):
+        from urllib.parse import parse_qs, urlsplit
+
+        term = parse_qs(urlsplit(url).query)["q"][0]
+        self.queries.append(term)
+        products = [{"title": t, "url": u} for t, u in self.results.get(term, [])]
+        return json.dumps({"resources": {"results": {"products": products}}})
+
+
+async def test_search_falls_back_from_name_to_model_to_barcode():
+    from app.retailers.darty import DartyAdapter
+
+    oos = ("Smart TV TCL 85C7K QLED Mini-LED", "/products/tcl-tv-mini-led-85c7k-4k-216cm")
+    identity = identify("TCL 85C7K", identifiers={"gtin": "5901292525712"})
+    # Live behaviour: "TCL 85C7K" only suggests in-stock neighbours; "85C7K" finds the page.
+    fetcher = TermFetcher(
+        {"TCL 85C7K": [("Smart TV TCL 85C7L", "/products/tcl-85c7l")], "85C7K": [oos]}
+    )
+    links = await DartyAdapter(fetcher).search_product(identity)
+    assert links == ["https://www.darty.pt/products/tcl-tv-mini-led-85c7k-4k-216cm"]
+    assert fetcher.queries == ["85C7K"]
+    fetcher = TermFetcher({"5901292525712": [oos]})
+    links = await DartyAdapter(fetcher).search_product(identity)
+    assert fetcher.queries == ["85C7K", "TCL 85C7K", "5901292525712"]
+    assert len(links) == 1

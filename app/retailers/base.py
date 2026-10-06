@@ -65,7 +65,16 @@ class RetailerAdapter:
         brand = data.get("brand")
         if isinstance(brand, dict):
             brand = brand.get("name")
-        ids = {k: str(data[k]) for k in ("gtin13", "gtin", "mpn") if data.get(k)}
+        ids = {}
+        # Stores label the same EAN as gtin13, gtin, gtin12 or gtin14; compare one form.
+        for key in ("gtin13", "gtin", "gtin14", "gtin12"):
+            digits = re.sub(r"\D", "", str(data.get(key) or ""))
+            if len(digits) in (12, 13, 14):
+                gtin = digits.zfill(14)
+                ids["gtin"] = gtin[1:] if gtin.startswith("0") else gtin
+                break
+        if data.get("mpn"):
+            ids["mpn"] = str(data["mpn"])
         return identify(
             title,
             brand=brand if isinstance(brand, str) else None,
@@ -188,8 +197,22 @@ class RetailerAdapter:
         # Only fetch a small number of likely matches, never an entire search catalog.
         return list(dict.fromkeys(url for _, url in sorted(found)))[:4]
 
+    def search_terms(self, identity: Identity) -> list[str]:
+        # Store searches rank in-stock items first, so "brand model" can push a discontinued or
+        # out-of-stock page out of the results; the bare model finds it, and the barcode is the
+        # last resort for stores that index it.
+        terms = (identity.model, identity.name, identity.identifiers.get("gtin"))
+        return list(dict.fromkeys(term for term in terms if term))
+
     async def search_product(self, identity: Identity) -> list[str]:
-        query = quote(identity.name, safe="")
+        for term in self.search_terms(identity):
+            links = await self.search_term(term, identity)
+            if links:
+                return links
+        return []
+
+    async def search_term(self, term: str, identity: Identity) -> list[str]:
+        query = quote(term, safe="")
         url = f"https://{self.hosts[0]}{self.search_path.format(query=query)}"
         html = await self.fetcher.get(url, self.name, self.hosts)
         links = self.search_links(html, identity)

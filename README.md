@@ -171,7 +171,7 @@ Do not treat the numeric score as a calibrated probability. It explains the deci
 
 Offers are partitioned by retailer, seller and condition before deduplication. Within that partition, prefer retailer product ID, then normalized URL, then exact normalized title/model when authoritative IDs are absent. Marketing parameters and fragments are removed; offer/seller/variant parameters are retained. Database unique constraints are a final safeguard. Manual and discovered provenance merge into one row. Reconfirming a discovery draft is idempotent, and a matching existing product is reused.
 
-A product without a detected model can still be saved. A URL-only submission that cannot be parsed asks the user to retry with a model. Conflicting manual URLs remain visible in the preview and are not silently merged. Name-only discovery depends on the stores' search results; a retired model can have an accessible product URL while no longer appearing in search.
+A product without a detected model can still be saved. A URL-only submission that cannot be parsed asks the user to retry with a model. Conflicting manual URLs remain visible in the preview and are not silently merged. Discovery searches each store by the bare model number first, then the full name, then the product barcode (GTIN/EAN), stopping at the first query with matching links. Store searches rank in-stock products first, so brand+model queries can hide an out-of-stock or retired listing that the model number still finds. FNAC's search omits unavailable products entirely; paste FNAC links for those. Barcodes are normalized to one `gtin` form across stores.
 
 ## Checks, history and alerts
 

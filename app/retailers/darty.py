@@ -27,8 +27,8 @@ class DartyAdapter(RetailerAdapter):
                 result.append(url)
         return list(dict.fromkeys(result))[:4]
 
-    async def search_product(self, identity: Identity) -> list[str]:
-        query = urlencode({"q": identity.name, "resources[type]": "product", "resources[limit]": 4})
+    async def search_term(self, term: str, identity: Identity) -> list[str]:
+        query = urlencode({"q": term, "resources[type]": "product", "resources[limit]": 10})
         raw = await self.fetcher.get(
             f"https://www.darty.pt/search/suggest.json?{query}", self.name, self.hosts
         )

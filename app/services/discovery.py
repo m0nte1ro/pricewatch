@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.models import DiscoveryDraft, Product
 from app.retailers.parsing import ScrapeError
-from app.schemas.domain import Candidate, Identity
+from app.schemas.domain import Candidate, Condition, Identity
 from app.services.listings import add_candidates
 from app.services.matching import deduplicate, identify, match_identity
 
@@ -62,11 +62,17 @@ class DiscoveryService:
             except Exception:
                 log.exception("manual_adapter_failed")
                 errors.append("A manual URL adapter failed; other sources continued.")
+        # Outlet/refurbished pages may carry a retailer barcode; only new stock defines identity.
+        reference = [m for m in manual if m.condition in (Condition.NEW, Condition.UNKNOWN)]
         identity = (
             identify(payload["name"], category=payload["category"])
             if payload["name"]
-            else (manual[0].identity if manual else None)
+            else (reference or manual)[0].identity.model_copy(deep=True)
+            if manual
+            else None
         )
+        if identity is not None and not payload["name"] and not reference:
+            identity.identifiers = {}
         if identity is None:
             self._fail(
                 draft_id,
@@ -80,7 +86,7 @@ class DiscoveryService:
             enriched = next(
                 (
                     item.identity
-                    for item in manual
+                    for item in reference
                     if match_identity(identity, item.identity).level in ("EXACT", "HIGH")
                 ),
                 None,
@@ -121,7 +127,7 @@ class DiscoveryService:
                 Candidate(
                     listing=snapshot,
                     sources=[source],
-                    match=match_identity(identity, snapshot.identity),
+                    match=match_identity(identity, snapshot.identity, snapshot.condition),
                 )
                 for source, snapshots in (("manual", manual), ("discovered", automatic))
                 for snapshot in snapshots

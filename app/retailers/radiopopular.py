@@ -1,4 +1,5 @@
 from app.retailers.base import RetailerAdapter
+from app.schemas.domain import Condition
 
 
 class RadioPopularAdapter(RetailerAdapter):
@@ -7,4 +8,5 @@ class RadioPopularAdapter(RetailerAdapter):
     hosts = ("www.radiopopular.pt", "radiopopular.pt")
     search_path = "/pesquisa/{query}"
     product_pattern = r"/produto/([^/?]+)"
-    status_note = "Partial: live price, stock and search parsing validated. Seller and condition are not consistently exposed and remain unknown."
+    status_note = "Partial: live price, stock and search parsing validated. Sells its own new stock, so offers without outlet/refurbished markers count as new; seller is not exposed."
+    default_condition = Condition.NEW

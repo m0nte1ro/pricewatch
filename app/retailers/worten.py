@@ -13,7 +13,7 @@ class WortenAdapter(RetailerAdapter):
     search_path = "/search?query={query}"
     product_pattern = r"/produtos/[^/?]+-(\d+)$"
     status = "supported"
-    status_note = "Product JSON-LD, seller and search validated against live Worten HTML. A later live httpx request returned 403; cooldown applies. Outlet grades require explicit page evidence."
+    status_note = "Product JSON-LD, seller, search and outlet-grade discovery validated live over HTTP/2. Outlet grades require explicit page evidence."
     seller_selector = ".product-price-info__seller__name"
     condition_selector = ".product-condition, .outlet-grade, [data-condition]"
     original_selector = ".price__old, .product-price__old, del[itemprop='price']"
@@ -35,12 +35,14 @@ class WortenAdapter(RetailerAdapter):
         return list(dict.fromkeys(links))[:4]
 
     async def search_product(self, identity) -> list[str]:
-        # This is the public search endpoint used by Worten's own storefront.
+        # This is the public search endpoint used by Worten's own storefront. "Brand model"
+        # queries sometimes hit a broad reranked index that pages the exact model out of view;
+        # the bare model number returns it consistently.
         raw = await self.fetcher.get(
             "https://www.worten.pt/worten-api/search-products",
             self.name,
             self.hosts,
-            json_body={"query": identity.name, "params": {}},
+            json_body={"query": identity.model or identity.name, "params": {}},
         )
         try:
             payload = json.loads(raw)

@@ -128,3 +128,33 @@ async def test_queued_requests_obey_new_cooldown(db):
     )
     assert all(isinstance(result, BlockedError) for result in results)
     assert len(calls) == 1
+
+
+async def test_alerts_saved_during_delivery_are_sent_in_the_same_run(db):
+    settings = SettingsService(db)
+    settings.save(Preferences(ntfy_topic="topic"))
+    with db.session() as session:
+        product = Product(canonical_name="TV")
+        session.add(product)
+        session.flush()
+        product_id = product.id
+        session.add(Alert(product_id=product_id, event_type="target_hit", message="first"))
+    sent = []
+
+    class SlowProvider:
+        def __init__(self, prefs):
+            pass
+
+        async def send(self, title, message, urgent=False):
+            sent.append(message)
+            if message == "first":
+                # A second confirmation saves an alert and asks for delivery mid-send.
+                with db.session() as session:
+                    session.add(
+                        Alert(product_id=product_id, event_type="insane_deal", message="second")
+                    )
+                await service.deliver()
+
+    service = NotificationService(db, settings, SlowProvider)
+    await service.deliver()
+    assert sent == ["first", "second"]

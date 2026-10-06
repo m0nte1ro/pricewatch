@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas.domain import Identity
+from app.schemas.domain import Condition, Identity
 from app.services.matching import deduplicate, identify, match_identity
 
 
@@ -76,3 +76,36 @@ def test_same_canonical_url_with_changed_id_does_not_duplicate(candidate):
     other = candidate.model_copy(deep=True)
     other.listing.retailer_product_id = "changed"
     assert len(deduplicate([candidate, other])) == 1
+
+
+def test_regional_manufacturer_code_requires_review():
+    family = identify('Samsung TV Neo QLED 65" QN90D')
+    regional = identify("TV SAMSUNG TQ65QN90DATXXC 65 Neo QLED")
+    assert regional.size == "65"
+    match = match_identity(family, regional)
+    assert match.level == "LOW" and "TQ65QN90DATXXC" in match.reason
+
+
+@pytest.mark.parametrize(
+    "other",
+    ["TV SAMSUNG TQ55QN90DATXXC 55 Neo QLED", "TV SAMSUNG TQ65QN95DATXXC 65", "LG 65QN90D"],
+)
+def test_regional_code_rule_does_not_merge_other_models(other):
+    family = identify('Samsung TV Neo QLED 65" QN90D')
+    assert match_identity(family, identify(other)).level == "CONFLICT"
+
+
+def test_sony_model_size():
+    identity = identify("Sony Bravia 7 K-65XR70")
+    assert (identity.model, identity.size, identity.category) == ("K65XR70", "65", "tv")
+
+
+def test_outlet_relabelled_with_retailer_barcode_matches():
+    new = identify("TCL 85C7K", identifiers={"gtin13": "5901292525712"})
+    outlet = identify("TCL 85C7K Outlet Grade A", identifiers={"gtin13": "5608947517718"})
+    assert match_identity(new, outlet, Condition.A).level == "HIGH"
+    # A new item with the same model but another barcode is plausible but must be reviewed.
+    assert match_identity(new, outlet, Condition.NEW).level == "LOW"
+    # A different barcode never rescues a different model.
+    other = identify("TCL 85C8K", identifiers={"gtin13": "5608947517718"})
+    assert match_identity(new, other, Condition.A).level == "CONFLICT"

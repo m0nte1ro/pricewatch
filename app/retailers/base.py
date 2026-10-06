@@ -4,7 +4,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsp
 from bs4 import BeautifulSoup
 
 from app.retailers.parsing import ScrapeError, availability, condition, money, product_data, text_at
-from app.schemas.domain import Identity, Snapshot
+from app.schemas.domain import Condition, Identity, Snapshot
 from app.services.matching import identify, normalize
 
 
@@ -22,6 +22,9 @@ class RetailerAdapter:
     seller_selector = ""
     condition_selector = ""
     original_selector = ""
+    # Used only when the page shows no condition evidence. First-party stores selling only new
+    # stock may set NEW; marketplaces must stay UNKNOWN so alerts never assume new.
+    default_condition = Condition.UNKNOWN
 
     def __init__(self, fetcher):
         self.fetcher = fetcher
@@ -120,6 +123,8 @@ class RetailerAdapter:
                 [title, text_at(soup, self.condition_selector), str(offer.get("itemCondition", ""))]
             )
             item_condition = condition(condition_text)
+            if item_condition == Condition.UNKNOWN:
+                item_condition = self.default_condition
             offer_url = urljoin(url, offer.get("url") or url)
             try:
                 offer_url = self.normalize_url(offer_url)

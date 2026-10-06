@@ -83,13 +83,16 @@ class MonitoringService:
                 ),
                 None,
             )
+            level = (
+                match_identity(identity, snapshot.identity, snapshot.condition).level
+                if snapshot
+                else None
+            )
             if snapshot is None:
                 error = "Original seller/condition offer is missing. Rediscover to review changed offers."
-            elif match_identity(identity, snapshot.identity).level == "CONFLICT":
+            elif level == "CONFLICT":
                 error = "Product identity changed on retailer page; review required"
-            elif match_identity(identity, snapshot.identity).level == "LOW" and normalize(
-                snapshot.title
-            ) != normalize(listing.title):
+            elif level == "LOW" and normalize(snapshot.title) != normalize(listing.title):
                 error = "Product identity can no longer be verified; review required"
         except Exception as exc:
             from app.retailers.parsing import ScrapeError

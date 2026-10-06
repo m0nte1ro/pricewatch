@@ -58,6 +58,12 @@ def test_outlet_not_confused_with_new(registry):
         ("1.299,99 €", "1299.99"),
         ("€1,299.99", "1299.99"),
         ("999,00", "999.00"),
+        ("1.299 €", "1299.00"),
+        ("2.499", "2499.00"),
+        ("1,299", "1299.00"),
+        ("1.299.999", "1299999.00"),
+        ("12,5", "12.50"),
+        ("999.99", "999.99"),
         ("0", None),
         ("unknown", None),
     ],
@@ -73,6 +79,8 @@ def test_money(text, expected):
         ("Grade B", "outlet_grade_b"),
         ("Caixa aberta", "outlet_open_box"),
         ("Recondicionado", "refurbished"),
+        ("TCL 55P8L (Reacondicionado)", "refurbished"),
+        ("Amazon Renewed", "refurbished"),
         ("Usado", "used"),
         ("", "unknown"),
     ],
@@ -92,6 +100,22 @@ def test_url_normalization(registry):
         )
         == "https://www.amazon.es/dp/B012345678?smid=SELLER"
     )
+    # Search-result links must not keep the query, or every result looks relevant.
+    assert (
+        registry.adapters["amazon_es"].normalize_url(
+            "https://www.amazon.es/TCL-65V6C/dp/B0D1234567/ref=sr_1_3?crid=X&keywords=TCL+85C7K&qid=1&sr=8-3"
+        )
+        == "https://www.amazon.es/dp/B0D1234567"
+    )
+
+
+def test_amazon_search_ignores_results_for_other_models(registry):
+    html = (
+        '<a href="/TCL-65V6C/dp/B0D1234567/ref=sr_1_1?keywords=TCL+85C7K">TCL 65V6C 65 pulgadas</a>'
+        '<a href="/TCL-85C7K/dp/B0D7654321/ref=sr_1_2?keywords=TCL+85C7K">TCL 85C7K Mini LED</a>'
+    )
+    links = registry.adapters["amazon_es"].search_links(html, identify("TCL 85C7K"))
+    assert links == ["https://www.amazon.es/dp/B0D7654321"]
 
 
 @pytest.mark.parametrize(
@@ -120,14 +144,14 @@ def test_bad_page_does_not_invent_price(registry):
         registry.adapters["worten"].parse("<h1>Something went wrong</h1>", URLS["worten"])
 
 
-def test_darty_live_html_reports_missing_condition(registry):
+def test_darty_first_party_offer_without_markers_is_new(registry):
     listing = registry.adapters["darty"].parse(
         (FIXTURES / "darty_live.html").read_text(),
         "https://www.darty.pt/products/smart-tv-tcl-55p8l-qd-mini-led-55-uhd-4k-google-tv-140cm-5901292530204",
     )[0]
     assert listing.price == Decimal("499.99")
     assert listing.identity.model == "55P8L"
-    assert listing.condition == "unknown"
+    assert listing.condition == "new"
     assert listing.retailer_product_id == "T00250456"
 
 
@@ -139,7 +163,29 @@ def test_radio_live_microdata(registry):
     assert listing.price == Decimal("2699.99")
     assert listing.availability == "out_of_stock"
     assert listing.identity.model == "85C7L"
+    assert listing.condition == "new"
     assert listing.retailer_product_id == "F126186"
+
+
+def test_first_party_default_never_hides_outlet_markers(registry):
+    html = (
+        '<h1>TV TCL 55P8L Outlet Grade B</h1><span itemprop="price" content="399.99"></span>'
+        '<link itemprop="availability" href="https://schema.org/InStock">'
+    )
+    listing = registry.adapters["radiopopular"].parse(
+        html, "https://www.radiopopular.pt/produto/tv-tcl-55p8l"
+    )[0]
+    assert listing.condition == "outlet_grade_b"
+
+
+def test_marketplace_without_condition_stays_unknown(registry):
+    html = (
+        '<span id="productTitle">TCL 85C7K</span>'
+        '<div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">999,99 €</span></span></div>'
+        '<div id="availability">En stock</div>'
+    )
+    listing = registry.adapters["amazon_es"].parse(html, "https://www.amazon.es/dp/B0D7654321")[0]
+    assert listing.condition == "unknown"
 
 
 def test_recommendations_do_not_replace_main_product(registry):
@@ -154,3 +200,28 @@ def test_darty_live_search_filters_other_sizes(registry):
     assert len(links) == 1
     assert "55p8l" in links[0]
     assert "_psid" not in links[0]
+
+
+AMAZON_BUY_BOX = (
+    '<span id="productTitle">TCL 85C7L 85 polegadas SQD-Mini LED</span>'
+    '<div id="corePriceDisplay_desktop_feature_div"><span class="a-price"><span class="a-offscreen"></span></span></div>'
+    '<div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">1\xa0777,90€</span></span></div>'
+    '<div id="availability">Estimativa de envio de 7 a 8 dias</div>'
+    '<div id="merchantInfoFeature_feature_div"><span class="offer-display-feature-text-message">{seller}</span></div>'
+    '<input id="add-to-cart-button">'
+)
+
+
+def test_amazon_buy_box_sold_by_amazon(registry):
+    html = AMAZON_BUY_BOX.format(seller="Amazon")
+    listing = registry.adapters["amazon_es"].parse(html, "https://www.amazon.es/dp/B0GVT5HYB3")[0]
+    # The empty placeholder price is skipped; a cart button means buyable.
+    assert listing.price == Decimal("1777.90")
+    assert listing.availability == "in_stock"
+    assert (listing.seller, listing.condition) == ("Amazon", "new")
+
+
+def test_amazon_third_party_seller_condition_stays_unknown(registry):
+    html = AMAZON_BUY_BOX.format(seller="MK TRADE SIA")
+    listing = registry.adapters["amazon_es"].parse(html, "https://www.amazon.es/dp/B0GVT5HYB3")[0]
+    assert (listing.seller, listing.condition) == ("MK TRADE SIA", "unknown")

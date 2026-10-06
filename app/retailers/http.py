@@ -58,13 +58,16 @@ class Fetcher:
                 state = session.get(RetailerState, retailer)
                 if state and state.blocked_until and state.blocked_until > now():
                     raise BlockedError("Retailer temporarily unavailable; retrying after cooldown")
+            # Some stores reject HTTP/1.1 from a browser user agent; negotiate HTTP/2 like one.
             async with httpx.AsyncClient(
                 timeout=prefs.request_timeout,
                 proxy=prefs.proxy or None,
                 transport=self.transport,
                 trust_env=False,
+                http2=True,
                 headers={
                     "User-Agent": prefs.user_agent,
+                    "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
                     "Accept-Language": "pt-PT,pt;q=0.9,es;q=0.8,en;q=0.7",
                 },
             ) as client:

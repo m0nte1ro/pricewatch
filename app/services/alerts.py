@@ -14,6 +14,8 @@ def emit(
     event: str,
     old: Decimal | None,
     new: Decimal | None,
+    *,
+    push: bool = True,
 ):
     prices = (
         f"{old if old is not None else '—'} → {new if new is not None else '—'} {listing.currency}"
@@ -31,6 +33,7 @@ def emit(
             old_price=old,
             new_price=new,
             message=message,
+            notification_state="pending" if push else "skipped",
         )
     )
     log.info(
@@ -44,12 +47,13 @@ def evaluate(
 ):
     old, new = listing.current_price, snapshot.price
     if initial:
+        # Listings are only added after the user confirms them, so record without a push.
         event = (
             "new_listing"
             if snapshot.condition in (Condition.NEW, Condition.UNKNOWN)
             else "outlet_listing"
         )
-        emit(session, product, listing, event, None, new)
+        emit(session, product, listing, event, None, new, push=False)
     elif listing.availability != snapshot.availability:
         if snapshot.availability == "in_stock":
             emit(session, product, listing, "became_available", old, new)

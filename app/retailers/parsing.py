@@ -26,6 +26,9 @@ def money(value: Any) -> Decimal | None:
             if text.rfind(",") > text.rfind(".")
             else text.replace(",", "")
         )
+    elif re.fullmatch(r"-?\d{1,3}(?:[.,]\d{3})+", text):
+        # "1.299 €" / "1,299": groups of exactly three digits are thousands, not cents.
+        text = re.sub(r"[.,]", "", text)
     elif "," in text:
         text = text.replace(",", ".")
     try:
@@ -40,7 +43,7 @@ def condition(value: str) -> Condition:
     for grade, result in (("a", Condition.A), ("b", Condition.B), ("c", Condition.C)):
         if re.search(rf"(?:grade|grau|grado)\s*[-:]?\s*{grade}\b", text):
             return result
-    if any(x in text for x in ("refurbished", "recondicionado", "refurbishedcondition")):
+    if any(x in text for x in ("refurbished", "recondicionado", "reacondicionado", "renewed")):
         return Condition.REFURBISHED
     if any(x in text for x in ("outlet", "open box", "open-box", "caixa aberta")):
         return Condition.OUTLET
@@ -100,7 +103,9 @@ def product_data(soup: BeautifulSoup) -> list[dict]:
 
 
 def text_at(soup: BeautifulSoup, selector: str) -> str:
-    item = soup.select_one(selector) if selector else None
-    if item is None:
-        return ""
-    return str(item.get("content") or item.get_text(" ", strip=True))
+    # Pages often contain empty placeholders for the same widget; use the first with text.
+    for item in soup.select(selector) if selector else []:
+        text = str(item.get("content") or item.get_text(" ", strip=True))
+        if text:
+            return text
+    return ""

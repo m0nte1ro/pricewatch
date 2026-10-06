@@ -3,7 +3,7 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
-from app.schemas.domain import Candidate, Identity, Match
+from app.schemas.domain import Candidate, Condition, Identity, Match
 
 log = logging.getLogger(__name__)
 BRANDS = (
@@ -76,8 +76,10 @@ def identify(
                 model += suffix.group(1)
     model = normalize(model) or None
     size_match = re.search(r'(\d{2,3})\s*(?:["″]|POLEGADAS|INCH)', upper)
-    model_size = re.search(r"^(?:OLED|QE|UE|KD|XR)?(\d{2,3})[A-Z]", model or "")
-    is_tv = bool(re.search(r"\b(?:TV|TELEVISOR|TELEVISAO|TELEVISION|QLED|MINILED|OLED)\b", upper))
+    model_size = re.search(r"^(?:OLED|QE|UE|TQ|GQ|KD|XR|K)?(\d{2,3})[A-Z]", model or "")
+    is_tv = bool(
+        re.search(r"\b(?:TV|TELEVISOR|TELEVISAO|TELEVISION|QLED|MINILED|OLED|BRAVIA)\b", upper)
+    )
     if category == "tv" or is_tv or (brand in BRANDS[:9] and model_size):
         category = "tv"
     size = (
@@ -96,15 +98,47 @@ def identify(
     )
 
 
-def match_identity(expected: Identity, actual: Identity) -> Match:
-    for field in ("brand", "model", "size"):
+def family_code(short: str, full: str, size: str | None) -> bool:
+    """True when a family model (QN90D) is embedded in a regional code (TQ65QN90DATXXC)."""
+    if not short[:1].isalpha() or len(short) < 4:
+        return False
+    match = re.fullmatch(rf"[A-Z]{{0,4}}(\d{{2,3}}){re.escape(short)}[A-Z0-9]*", full)
+    return bool(match and (not size or match.group(1) == normalize(size)))
+
+
+def match_identity(
+    expected: Identity, actual: Identity, condition: Condition = Condition.UNKNOWN
+) -> Match:
+    for field in ("brand", "size", "model"):
         a, b = getattr(expected, field), getattr(actual, field)
         if a and b and normalize(a) != normalize(b):
+            if field == "model":
+                short, full = sorted((normalize(a), normalize(b)), key=len)
+                if family_code(short, full, expected.size or actual.size):
+                    return Match(
+                        level="LOW",
+                        score=0.6,
+                        reason=f"Model {short} appears in manufacturer code {full}; confirm",
+                    )
             return Match(level="CONFLICT", score=0, reason=f"Different {field}: {a} / {b}")
     shared = expected.identifiers.keys() & actual.identifiers.keys()
+    same_model = bool(
+        expected.model and actual.model and normalize(expected.model) == normalize(actual.model)
+    )
     if any(expected.identifiers[k] != actual.identifiers[k] for k in shared):
-        return Match(level="CONFLICT", score=0, reason="Manufacturer identifiers differ")
-    if expected.model and actual.model and normalize(expected.model) == normalize(actual.model):
+        if not same_model:
+            return Match(level="CONFLICT", score=0, reason="Manufacturer identifiers differ")
+        # Retailers relabel outlet/refurbished stock with their own barcode (e.g. Worten Outlet).
+        if condition not in (Condition.NEW, Condition.UNKNOWN):
+            return Match(
+                level="HIGH",
+                score=0.9,
+                reason="Exact model; retailer barcode on outlet/second-hand stock",
+            )
+        return Match(
+            level="LOW", score=0.6, reason="Exact model but different barcode; confirm identity"
+        )
+    if same_model:
         return Match(level="EXACT", score=1, reason="Exact model match; no conflicting attributes")
     if shared:
         return Match(level="HIGH", score=0.98, reason="Manufacturer identifier match")

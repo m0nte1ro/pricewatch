@@ -3,7 +3,7 @@ from urllib.parse import urlencode, urljoin
 
 from app.retailers.base import RetailerAdapter
 from app.retailers.parsing import ScrapeError
-from app.schemas.domain import Identity
+from app.schemas.domain import Condition, Identity
 from app.services.matching import normalize
 
 
@@ -13,7 +13,8 @@ class DartyAdapter(RetailerAdapter):
     hosts = ("www.darty.pt", "darty.pt")
     search_path = "/search?q={query}"
     product_pattern = r"/(?:products|produtos|produto)/([^/?]+)"
-    status_note = "Partial Portugal adapter: live product JSON-LD and public Shopify product search validated. Seller and condition are often unknown."
+    status_note = "Partial Portugal adapter: live product JSON-LD and public Shopify product search validated. Sells its own new stock, so offers without outlet/refurbished markers count as new; seller is often unknown."
+    default_condition = Condition.NEW
 
     def api_search_links(self, payload: dict, identity: Identity) -> list[str]:
         items = payload.get("resources", {}).get("results", {}).get("products", [])

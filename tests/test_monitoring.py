@@ -79,6 +79,14 @@ def test_allowed_grade_a_and_initial_threshold(db, candidate):
     candidate.listing.price = Decimal("789")
     create_product(db, candidate, conditions=["new", "outlet_grade_a"])
     assert events(db) == ["outlet_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        states = dict(session.execute(select(Alert.event_type, Alert.notification_state)).all())
+    # The user just confirmed the listing: record it, but only push the price alerts.
+    assert states == {
+        "outlet_listing": "skipped",
+        "target_hit": "pending",
+        "insane_deal": "pending",
+    }
 
 
 def test_availability_transition_and_currency_safety(db, candidate):

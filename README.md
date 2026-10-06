@@ -18,13 +18,13 @@ Live checks were made on 2026-10-06. These are implementation/validation results
 
 | Retailer | Status | Coverage and limits |
 |---|---|---|
-| Worten PT | Supported | Live product JSON-LD, price, availability, seller, identity and public storefront search endpoint validated. Explicit outlet grades override generic `NewCondition`. A subsequent live httpx run returned 403 and correctly entered cooldown. Only concrete returned offers are monitored; this is not exhaustive marketplace-offer enumeration. |
-| FNAC PT | Partial | Structured-data parser, URL IDs, search route and contract fixtures. A live request returned 403. It is reported and cooled down; no bypass. |
-| Darty PT | Partial | Live Shopify product JSON-LD, price, model and stock validated. Public Shopify product search is also live-validated. Seller and condition can be unknown. This adapter is for Portugal, not darty.com. |
-| Rádio Popular | Partial | Live price/stock microdata and product/search links validated. Seller/condition often missing. |
-| Amazon ES | Partial | ASIN normalization, buy-box selectors, search links and contract fixtures. Live coverage is not validated; bot protection and changing markup can prevent checks. |
+| Worten PT | Supported | Live product JSON-LD, price, availability, seller, identity and public storefront search endpoint validated, including discovery of Worten Outlet Grade A offers. Explicit outlet grades override generic `NewCondition`. Worten rejects HTTP/1.1 from a browser user agent; requests use HTTP/2. Search queries the bare model number, which the storefront index returns consistently. Only concrete returned offers are monitored; this is not exhaustive marketplace-offer enumeration. |
+| FNAC PT | Partial | Live search, product JSON-LD, price, stock, seller, condition and GTIN validated over HTTP/2. FNAC runs bot protection that can still answer 403; that is reported and cooled down, with no bypass. Other marketplace sellers on a product are not enumerated. |
+| Darty PT | Partial | Live Shopify product JSON-LD, price, model and stock validated. Public Shopify product search is also live-validated. Darty sells its own new stock, so offers without outlet/refurbished markers are `new`; seller can be unknown. This adapter is for Portugal, not darty.com. |
+| Rádio Popular | Partial | Live price/stock microdata and product/search links validated. It sells its own new stock, so offers without outlet/refurbished markers are `new`; seller is not exposed. |
+| Amazon ES | Partial | Live search, buy-box price, seller and stock validated. Search-result links are reduced to `/dp/ASIN` (plus `smid`). Offers sold by Amazon are `new`; third-party sellers stay `unknown` unless the page says new/used/renewed. Bot protection and changing markup can prevent checks. |
 
-Missing conditions are **unknown**, never assumed new. Allow unknown in an individual product's settings only if you want its offers included in price alerts. Retailer settings expose capabilities and recent failures. A blocked adapter does not stop the others.
+Condition comes from page evidence first: outlet grades, open box, refurbished/reacondicionado/renewed and used markers always win. Without evidence, an adapter may declare a default only when the store sells exclusively its own new stock (Darty, Rádio Popular, and offers sold by Amazon itself). Otherwise the condition is **unknown**, never assumed new. Allow unknown in an individual product's settings only if you want those offers included in price alerts. Retailer settings expose capabilities and recent failures. A blocked adapter does not stop the others.
 
 ## Quick start: Docker Compose
 
@@ -163,11 +163,11 @@ To grow: add adapters/categories without changing routes; add notification provi
 `services/matching.py` normalizes punctuation/case and compact TV models such as `85 C7K` → `85C7K`. It extracts brand, model and screen size, and preserves suffixes such as PRO. Retailer structured data supplies GTIN/MPN when available. The model parser is TV-oriented; unrecognized categories still work through manually confirmed listings.
 
 - **EXACT**: matching model, with no conflicting brand, size or shared manufacturer identifier.
-- **HIGH**: matching manufacturer identifier, with no contradictory attributes.
-- **LOW**: title similarity only; explicit checkbox confirmation required.
+- **HIGH**: matching manufacturer identifier with no contradictory attributes, or an exact model whose outlet/refurbished/used offer carries the retailer's own barcode (Worten relabels outlet stock).
+- **LOW**: explicit checkbox confirmation required. Used for title similarity only, an exact model on a *new* offer with a different barcode, or a family model embedded in a regional code after the screen size (`QN90D` in `TQ65QN90DATXXC`).
 - **CONFLICT**: a known attribute disagrees; cannot be saved under the same product.
 
-Do not treat the numeric score as a calibrated probability. It explains the decision level. Variants with different model suffixes are deliberately kept distinct.
+Do not treat the numeric score as a calibrated probability. It explains the decision level. Variants with different model suffixes (`85C7K` / `85C7K PRO`) remain CONFLICT. An outlet-only manual URL never supplies the product's manufacturer identifiers.
 
 Offers are partitioned by retailer, seller and condition before deduplication. Within that partition, prefer retailer product ID, then normalized URL, then exact normalized title/model when authoritative IDs are absent. Marketing parameters and fragments are removed; offer/seller/variant parameters are retained. Database unique constraints are a final safeguard. Manual and discovered provenance merge into one row. Reconfirming a discovery draft is idempotent, and a matching existing product is reused.
 
@@ -175,13 +175,13 @@ A product without a detected model can still be saved. A URL-only submission tha
 
 ## Checks, history and alerts
 
-Default polling is 60 minutes, configurable globally or per retailer (minimum 5 minutes). Each listing persists its next due time with ±5% jitter. The scheduler wakes roughly every minute, coalesces missed runs, and does not overlap checks. Force checks retain request rate limits and cooldowns. Requests to a store are paced, have a configurable timeout and response-size cap, validate redirects, and retry transient transport/5xx errors up to three times with exponential backoff.
+Default polling is 60 minutes, configurable globally or per retailer (minimum 5 minutes). Each listing persists its next due time with ±5% jitter. The scheduler wakes roughly every minute, coalesces missed runs, and does not overlap checks. Force checks retain request rate limits and cooldowns. Requests use HTTP/2 with standard browser `Accept` headers. Requests to a store are paced, have a configurable timeout and response-size cap, validate redirects, and retry transient transport/5xx errors up to three times with exponential backoff.
 
 HTTP 403/429 and known challenge pages produce a one-hour retailer cooldown. A failure records an error and preserves history and last known price. A listing with a check error is excluded from the dashboard's best-price calculation until a successful check. If a page switches seller/condition or model, the original listing is retained and marked for review.
 
 History is written when price, currency, stock or condition changes, or after 24 hours for sampling. Charts display each seller/condition separately, with selectable ranges and legend toggles. Long histories are sampled for the chart response; stored records are retained. Historical low/high/first values cover **all EUR conditions**, including disabled offers, and the UI labels this. Current best price considers only enabled, error-free, allowed-condition, EUR, in-stock offers. Threshold currency is EUR in this first version.
 
-Events include price drops, target/insane threshold crossings, newly discovered new/outlet offers, and transitions into/out of stock. An initial qualifying offer may trigger a threshold event; an unchanged state does not repeat it. Crossing back above and later below a threshold may alert again. Stock returning can alert again. Changing a threshold alone does not synthesize a historical crossing. Disallowed conditions never generate monetary alerts.
+Events include price drops, target/insane threshold crossings, newly discovered new/outlet offers, and transitions into/out of stock. New/outlet listing events for offers you just confirmed are recorded in Activity without a push notification; price, threshold and stock events are pushed. Delivery drains every due event, including ones saved while a previous delivery is still sending. An initial qualifying offer may trigger a threshold event; an unchanged state does not repeat it. Crossing back above and later below a threshold may alert again. Stock returning can alert again. Changing a threshold alone does not synthesize a historical crossing. Disallowed conditions never generate monetary alerts.
 
 Removing a product archives it and stops checks without deleting history. Disabling a listing also preserves its history. Discovery is initiated from Add Product or Find / add listings; periodic polling checks known offers and does not continuously enumerate new ones. Pending discoveries interrupted by a restart become retryable failures.
 
@@ -261,4 +261,4 @@ For an **opt-in live** discovery probe using a temporary database (no notificati
 .venv/bin/python -m tests.live_smoke
 ```
 
-The recorded live URL-only run found exact TCL 55P8L listings at Darty and Rádio Popular and merged Darty's manual/discovered sources. Worten returned 403 and was isolated. Retailer behavior varies by time and network; live probes are deliberately excluded from the deterministic suite.
+Recorded live runs (2026-10-06): a Worten-only TCL 85C7L URL found exact listings at all five retailers and merged the manual and discovered Worten sources. A Worten TCL 85C7K URL discovered the Worten Outlet Grade A offer (€783.57) and, with an €800 insane-deal threshold, pushed TARGET HIT and an urgent INSANE DEAL notification. Retailer behavior varies by time and network; live probes are deliberately excluded from the deterministic suite.

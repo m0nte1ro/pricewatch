@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import httpx
 import pytest
 from sqlalchemy import select
@@ -5,8 +7,8 @@ from sqlalchemy import select
 from app.models import Alert, Product, RetailerState
 from app.notifications.ntfy import NtfyProvider
 from app.retailers.http import Fetcher
-from app.retailers.parsing import BlockedError, ScrapeError
-from app.schemas.domain import Preferences
+from app.retailers.parsing import BlockedError, RateLimitedError, ScrapeError
+from app.schemas.domain import Preferences, now
 from app.services.notifications import NotificationService
 from app.services.settings import SettingsService
 
@@ -16,7 +18,7 @@ async def test_blocked_request_cools_down(db):
 
     def respond(request):
         calls.append(request)
-        return httpx.Response(429)
+        return httpx.Response(403)
 
     fetcher = Fetcher(
         db, lambda: Preferences(), transport=httpx.MockTransport(respond), min_delay=0
@@ -26,7 +28,41 @@ async def test_blocked_request_cools_down(db):
             await fetcher.get("https://www.worten.pt/", "worten", ("www.worten.pt",))
     assert len(calls) == 1
     with db.session() as session:
-        assert session.get(RetailerState, "worten").blocked_until is not None
+        assert session.get(RetailerState, "worten").blocked_until > now() + timedelta(minutes=55)
+
+
+async def test_rate_limit_slows_down_and_retries(db):
+    # Darty answered 429 to requests 2 s apart; that must not drop the store from discovery.
+    responses = [httpx.Response(429, headers={"Retry-After": "0"}), httpx.Response(200, text="ok")]
+
+    def respond(request):
+        return responses.pop(0)
+
+    fetcher = Fetcher(
+        db, lambda: Preferences(), transport=httpx.MockTransport(respond), min_delay=0
+    )
+    assert await fetcher.get("https://www.darty.pt/", "darty", ("www.darty.pt",)) == "ok"
+    with db.session() as session:
+        assert session.get(RetailerState, "darty").blocked_until is None
+
+
+@pytest.mark.parametrize("retry_after,expected_calls", [("0", 3), ("3600", 1)])
+async def test_persistent_rate_limit_pauses_briefly(db, retry_after, expected_calls):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": retry_after})
+
+    fetcher = Fetcher(
+        db, lambda: Preferences(), transport=httpx.MockTransport(respond), min_delay=0
+    )
+    with pytest.raises(RateLimitedError):
+        await fetcher.get("https://www.darty.pt/", "darty", ("www.darty.pt",))
+    assert len(calls) == expected_calls  # never waits longer than a minute inside a request
+    with db.session() as session:
+        blocked_until = session.get(RetailerState, "darty").blocked_until
+        assert now() + timedelta(minutes=5) < blocked_until < now() + timedelta(minutes=15)
 
 
 async def test_redirect_to_private_host_rejected(db):

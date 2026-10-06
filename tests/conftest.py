@@ -57,6 +57,7 @@ def site(db, tmp_path):
     app = create_app(Config(data_dir=tmp_path, scheduler_enabled=False), database=db)
     runtime = app.state.runtime
     runtime.fetcher.min_delay = 0
+    runtime.fetcher.intervals.clear()
     prices = {name: "1199.00" for name in URLS}
     requests = []
 

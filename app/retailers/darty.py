@@ -15,6 +15,8 @@ class DartyAdapter(RetailerAdapter):
     product_pattern = r"/(?:products|produtos|produto)/([^/?]+)"
     status_note = "Partial Portugal adapter: live product JSON-LD and public Shopify product search validated. Sells its own new stock, so offers without outlet/refurbished markers count as new; seller is often unknown."
     default_condition = Condition.NEW
+    # Darty's Shopify storefront answers 429 to requests 2 s apart.
+    request_interval = 5
 
     def api_search_links(self, payload: dict, identity: Identity) -> list[str]:
         items = payload.get("resources", {}).get("results", {}).get("products", [])

@@ -25,6 +25,8 @@ class RetailerAdapter:
     # Used only when the page shows no condition evidence. First-party stores selling only new
     # stock may set NEW; marketplaces must stay UNKNOWN so alerts never assume new.
     default_condition = Condition.UNKNOWN
+    # Seconds between requests to this store; None uses the fetcher default (2 s).
+    request_interval: float | None = None
 
     def __init__(self, fetcher):
         self.fetcher = fetcher

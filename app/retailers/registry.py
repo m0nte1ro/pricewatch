@@ -22,6 +22,10 @@ class Registry:
             )
         }
 
+        for adapter in self.adapters.values():
+            if adapter.request_interval:
+                fetcher.intervals[adapter.name] = adapter.request_interval
+
     def for_url(self, url: str):
         host = urlsplit(url).hostname
         for adapter in self.adapters.values():

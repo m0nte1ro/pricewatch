@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -13,7 +14,17 @@ class ScrapeError(Exception):
 
 
 class BlockedError(ScrapeError):
-    pass
+    cooldown = timedelta(hours=1)
+
+
+class RateLimitedError(BlockedError):
+    """HTTP 429: the store asks us to slow down, which is not a block."""
+
+    cooldown = timedelta(minutes=10)
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 def money(value: Any) -> Decimal | None:

@@ -8,10 +8,17 @@ import httpx
 from sqlalchemy import select
 
 from app.models import RetailerState
-from app.retailers.parsing import BlockedError, ScrapeError
+from app.retailers.parsing import BlockedError, RateLimitedError, ScrapeError
 from app.schemas.domain import Preferences, now
 
 log = logging.getLogger(__name__)
+
+
+def retry_after(value: str | None) -> float | None:
+    try:
+        return max(0.0, float(value)) if value else None
+    except ValueError:
+        return None  # HTTP-date form: fall back to our own backoff
 
 
 class Fetcher:
@@ -20,11 +27,13 @@ class Fetcher:
         self.get_preferences = get_preferences
         self.transport = transport
         self.min_delay = min_delay
+        # Per-store spacing for stores that throttle harder than the default (set by Registry).
+        self.intervals: dict[str, float] = {}
         self.locks: dict[str, asyncio.Lock] = {}
         self.last_request: dict[str, float] = {}
         self.browser_lock = asyncio.Lock()
 
-    def state(self, retailer: str, error: str | None = None, blocked: bool = False):
+    def state(self, retailer: str, error: str | None = None, cooldown: timedelta | None = None):
         with self.db.session() as session:
             row = session.get(RetailerState, retailer)
             if row is None:
@@ -32,8 +41,8 @@ class Fetcher:
                 session.add(row)
             if error:
                 row.last_failure_at, row.last_error = now(), error
-                if blocked:
-                    row.blocked_until = now() + timedelta(hours=1)
+                if cooldown:
+                    row.blocked_until = now() + cooldown
             else:
                 row.last_success_at, row.last_error, row.blocked_until = now(), None, None
 
@@ -85,13 +94,10 @@ class Fetcher:
                     "Accept-Language": "pt-PT,pt;q=0.9,es;q=0.8,en;q=0.7",
                 },
             ) as client:
+                spacing = max(self.min_delay, self.intervals.get(retailer, 0))
                 for attempt in range(3):
                     await asyncio.sleep(
-                        max(
-                            0,
-                            self.min_delay
-                            - (time.monotonic() - self.last_request.get(retailer, 0)),
-                        )
+                        max(0, spacing - (time.monotonic() - self.last_request.get(retailer, 0)))
                     )
                     self.last_request[retailer] = time.monotonic()
                     try:
@@ -106,9 +112,14 @@ class Fetcher:
                                         response.url.join(response.headers.get("location", ""))
                                     )
                                     continue
-                                if response.status_code in (403, 429):
+                                if response.status_code == 429:
+                                    raise RateLimitedError(
+                                        "Retailer is rate limiting requests (HTTP 429); pausing it for 10 minutes",
+                                        retry_after(response.headers.get("retry-after")),
+                                    )
+                                if response.status_code == 403:
                                     raise BlockedError(
-                                        f"Retailer returned HTTP {response.status_code}; cooling down for one hour"
+                                        "Retailer returned HTTP 403; cooling down for one hour"
                                     )
                                 response.raise_for_status()
                                 chunks, length = [], 0
@@ -140,7 +151,19 @@ class Fetcher:
                                 return html
                         raise ScrapeError("Too many retailer redirects")
                     except BlockedError as exc:
-                        self.state(retailer, str(exc), blocked=True)
+                        if isinstance(exc, RateLimitedError) and attempt < 2:
+                            # Slow down and retry this request instead of dropping the store.
+                            wait = (
+                                exc.retry_after if exc.retry_after is not None else 10 * 3**attempt
+                            )
+                            if wait <= 60:
+                                log.info(
+                                    "retailer_rate_limited",
+                                    extra={"retailer": retailer, "status": 429},
+                                )
+                                await asyncio.sleep(wait)
+                                continue
+                        self.state(retailer, str(exc), cooldown=exc.cooldown)
                         raise
                     except (httpx.HTTPError, ScrapeError) as exc:
                         retryable = isinstance(exc, httpx.TransportError) or (
@@ -208,7 +231,7 @@ class Fetcher:
                     finally:
                         await browser.close()
             except BlockedError as exc:
-                self.state(retailer, str(exc), blocked=True)
+                self.state(retailer, str(exc), cooldown=exc.cooldown)
                 raise
             except Exception:
                 raise ScrapeError(

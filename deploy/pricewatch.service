@@ -1,0 +1,31 @@
+[Unit]
+Description=Pricewatch homelab price monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pricewatch
+Group=pricewatch
+WorkingDirectory=/opt/pricewatch
+EnvironmentFile=/etc/pricewatch/pricewatch.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/pricewatch/browsers
+ExecStartPre=/opt/pricewatch/.venv/bin/python -m app.migrate
+ExecStart=/opt/pricewatch/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+StateDirectory=pricewatch
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pricewatch
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

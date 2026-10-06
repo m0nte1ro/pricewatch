@@ -227,3 +227,15 @@ def test_restart_lifts_cooldowns(site):
     runtime.fetcher.retry_now()
     with runtime.db.session() as session:
         assert session.get(RetailerState, "worten").blocked_until is None
+
+
+def test_unsupported_store_link_is_reported_without_discarding_the_others(site):
+    client, _, _, requests = site
+    _, page = discover(
+        client,
+        urls=[URLS["worten"], "https://www.pcdiga.com/tv-tcl-85c7k", URLS["darty"] + "?ref=mine"],
+    )
+    assert "Manual URL (www.pcdiga.com): Unsupported retailer URL" in page.text
+    assert '<details class="panel warnings" open>' in page.text
+    assert page.text.count("discovered + manual") == 2
+    assert not any("pcdiga" in r for r in requests)

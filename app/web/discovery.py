@@ -1,8 +1,9 @@
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from app.models import DiscoveryDraft
-from app.retailers.parsing import ScrapeError
 from app.schemas.domain import Condition
 from app.web.common import amount, get_product, protected, render, selection, validate_thresholds
 
@@ -19,11 +20,10 @@ async def start_discovery(request: Request):
         raise HTTPException(422, "Use a name up to 250 characters and at most 20 product URLs")
     if not name and not urls:
         raise HTTPException(422, "Enter a product name/model or at least one retailer URL")
-    try:
-        for url in urls:
-            runtime.registry.for_url(url).normalize_url(url)
-    except (ScrapeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from None
+    # Links from unsupported stores are reported in the discovery notes instead of rejecting
+    # the whole form, so one unusable link never discards the others.
+    if any(urlsplit(url).scheme != "https" or not urlsplit(url).hostname for url in urls):
+        raise HTTPException(422, "Product links must be full https:// URLs")
     target, insane = amount(form, "target_price"), amount(form, "insane_deal_price")
     validate_thresholds(target, insane)
     product_id = int(form["product_id"]) if str(form.get("product_id", "")).isdigit() else None

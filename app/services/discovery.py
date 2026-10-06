@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
@@ -67,7 +68,7 @@ class DiscoveryService:
                 seen_urls.add(url)
                 manual.extend(await adapter.fetch_listing(url))
             except (ScrapeError, ValueError) as exc:
-                errors.append(f"Manual URL: {exc}")
+                errors.append(f"Manual URL ({urlsplit(url).hostname}): {exc}")
             except Exception:
                 log.exception("manual_adapter_failed")
                 errors.append("A manual URL adapter failed; other sources continued.")

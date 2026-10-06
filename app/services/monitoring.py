@@ -32,7 +32,7 @@ class MonitoringService:
             prefs = self.settings.get()
             with self.db.session() as session:
                 query = (
-                    select(Listing.id)
+                    select(Listing.id, Listing.retailer)
                     .join(Product)
                     .where(
                         Listing.enabled.is_(True),
@@ -45,7 +45,11 @@ class MonitoringService:
                     query = query.where(Product.id == product_id)
                 if not force:
                     query = query.where(Listing.next_check_at <= now())
-                ids = list(session.scalars(query.order_by(Listing.next_check_at)))
+                rows = session.execute(query.order_by(Listing.next_check_at)).all()
+            ids = [row.id for row in rows]
+            if force:
+                # "Check now" is a user action: retry stores in cooldown once.
+                self.registry.fetcher.retry_now({row.retailer for row in rows})
             log.info("monitoring_started", extra={"count": len(ids)})
             semaphore = asyncio.Semaphore(3)
 

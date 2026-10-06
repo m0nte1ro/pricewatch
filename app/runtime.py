@@ -53,6 +53,9 @@ class Runtime:
                     "failed",
                     {"errors": ["Discovery interrupted by a restart. Please retry."]},
                 )
+        # A cooldown from before a restart (often an upgrade fixing the cause) must not keep a
+        # store silently skipped; the first new request re-arms it if the store still blocks.
+        self.fetcher.retry_now()
         if self.config.scheduler_enabled:
             self.scheduler.add_job(
                 self.tick,

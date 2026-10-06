@@ -5,6 +5,7 @@ from datetime import timedelta
 from urllib.parse import urlsplit
 
 import httpx
+from sqlalchemy import select
 
 from app.models import RetailerState
 from app.retailers.parsing import BlockedError, ScrapeError
@@ -35,6 +36,19 @@ class Fetcher:
                     row.blocked_until = now() + timedelta(hours=1)
             else:
                 row.last_success_at, row.last_error, row.blocked_until = now(), None, None
+
+    def retry_now(self, retailers=None):
+        """Lift cooldowns so a user action or restart tries a store once more.
+
+        One blocked request re-arms the cooldown, so this costs at most one request per store.
+        """
+        with self.db.session() as session:
+            query = select(RetailerState).where(RetailerState.blocked_until.is_not(None))
+            if retailers is not None:
+                query = query.where(RetailerState.name.in_(list(retailers)))
+            for row in session.scalars(query):
+                row.blocked_until = None
+                log.info("retailer_cooldown_lifted", extra={"retailer": row.name})
 
     @staticmethod
     def validate_url(url: str, hosts: tuple[str, ...]):

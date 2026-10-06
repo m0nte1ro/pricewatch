@@ -47,6 +47,15 @@ class DiscoveryService:
             payload = draft.payload
             draft.status = "running"
         manual, automatic, errors = [], [], []
+        # The user asked for this now: try stores in cooldown once instead of skipping them,
+        # above all the store of a URL they pasted.
+        retailers = set(payload["retailers"])
+        for url in payload["urls"]:
+            try:
+                retailers.add(self.registry.for_url(url).name)
+            except ScrapeError:
+                pass
+        self.registry.fetcher.retry_now(retailers)
         # Manual sources seed identity but never replace the independent retailer searches.
         seen_urls = set()
         for url in payload["urls"]:

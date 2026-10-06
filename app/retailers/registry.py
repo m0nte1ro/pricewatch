@@ -10,6 +10,7 @@ from app.retailers.worten import WortenAdapter
 
 class Registry:
     def __init__(self, fetcher):
+        self.fetcher = fetcher
         self.adapters = {
             cls.name: cls(fetcher)
             for cls in (

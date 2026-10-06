@@ -1,8 +1,10 @@
 import time
+from datetime import timedelta
 
 from sqlalchemy import func, select
 
-from app.models import DiscoveryDraft, Listing, Product
+from app.models import DiscoveryDraft, Listing, Product, RetailerState
+from app.schemas.domain import now
 from tests.conftest import URLS
 
 
@@ -189,3 +191,39 @@ async def test_manual_adapter_failure_does_not_stop_independent_discovery(site, 
         assert draft.status == "ready"
         assert len(draft.results["candidates"]) == 4
         assert any("manual URL adapter failed" in error for error in draft.results["errors"])
+
+
+def cool_down(runtime, *retailers):
+    with runtime.db.session() as session:
+        for name in retailers:
+            session.merge(
+                RetailerState(name=name, blocked_until=now() + timedelta(hours=1), last_error="403")
+            )
+
+
+def test_pasted_url_is_fetched_even_while_its_store_is_cooling_down(site):
+    # A cooldown left by an earlier failure must not swallow a URL the user just pasted.
+    client, runtime, _, requests = site
+    cool_down(runtime, "worten", "fnac")
+    path, page = discover(client, urls=[URLS["worten"]])
+    assert "temporarily unavailable" not in page.text
+    assert "discovered + manual" in page.text
+    assert any(r.startswith(URLS["worten"]) for r in requests)
+
+
+def test_no_listings_page_opens_discovery_notes(site):
+    client, runtime, prices, _ = site
+    for name in URLS:
+        prices[name] = "blocked"
+    _, page = discover(client, urls=[URLS["worten"]])
+    assert "No listings found" in page.text
+    assert '<details class="panel warnings" open>' in page.text
+    assert "Manual URL" in page.text
+
+
+def test_restart_lifts_cooldowns(site):
+    _, runtime, _, _ = site
+    cool_down(runtime, "worten")
+    runtime.fetcher.retry_now()
+    with runtime.db.session() as session:
+        assert session.get(RetailerState, "worten").blocked_until is None

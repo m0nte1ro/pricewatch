@@ -23,6 +23,11 @@ document.addEventListener('click', e => {
   if (!chip) return;
   chip.closest('form').querySelector('input[name="price"]').value = chip.dataset.fill;
 });
+// Destructive forms ask first; without JavaScript they submit directly.
+document.addEventListener('submit', event => {
+  const message = event.target.dataset?.confirm;
+  if (message && !window.confirm(message)) event.preventDefault();
+});
 document.addEventListener('htmx:responseError', event => {
   const target = event.detail.target;
   if (target) target.textContent = 'Request failed. Reload the page and try again.';

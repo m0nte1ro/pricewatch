@@ -802,7 +802,6 @@ def test_add_link_to_an_existing_product_saves_it_directly(site):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert response.headers["location"] == product_path + "?added=1"
     with runtime.db.session() as session:
         # No discovery step: the link is fetched and saved in the request itself.
         assert session.scalar(select(func.count()).select_from(DiscoveryDraft)) == drafts
@@ -812,8 +811,11 @@ def test_add_link_to_an_existing_product_saves_it_directly(site):
             Decimal("1299.99"),
             ["manual"],
         )
-    page = client.get(product_path + "?added=1").text
-    assert "Link added" in page and "storeone.pt" in page
+        assert response.headers["location"] == f"{product_path}?added={listing.id}"
+    page = client.get(response.headers["location"]).text
+    # Says exactly what was read, so a wrong reading can be removed straight away.
+    assert "Added storeone.pt: €1,299.99 · in stock · new" in page
+    assert f'action="/listings/{listing.id}/delete"' in page.split('class="notice"')[1]
     assert 'action="' + product_path + '/links"' in page
 
 
@@ -920,7 +922,7 @@ def test_the_same_link_can_be_watched_by_several_products(site):
         response = client.post(
             product_path + "/links", data=form_data(client, url=STORE_URL), follow_redirects=False
         )
-        assert response.headers["location"].endswith("?added=1")
+        assert not response.headers["location"].endswith("?added=0")
     with runtime.db.session() as session:
         assert session.scalar(select(func.count()).select_from(Product)) == 2
         rows = session.scalars(select(Listing).order_by(Listing.product_id)).all()
@@ -931,3 +933,35 @@ def test_the_same_link_can_be_watched_by_several_products(site):
             (2, "storeone.pt"),
         ]
         assert session.get(Product, 2).target_price == Decimal("700")
+
+
+def test_removing_a_listing_deletes_it_and_its_history(site):
+    client, runtime, _, _ = site
+    product_path = saved_product(client)
+    GENERIC_PAGES[STORE_URL] = STORE_PAGE
+    location = client.post(
+        product_path + "/links", data=form_data(client, url=STORE_URL), follow_redirects=False
+    ).headers["location"]
+    listing_id = int(location.rsplit("=", 1)[1])
+    page = client.get(product_path).text
+    assert 'data-confirm="Stop tracking this link?' in page
+    response = client.post(
+        f"/listings/{listing_id}/delete", data=form_data(client), follow_redirects=False
+    )
+    assert response.status_code == 303 and response.headers["location"] == product_path
+    with runtime.db.session() as session:
+        assert session.get(Listing, listing_id) is None
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(PriceHistory)
+                .where(PriceHistory.listing_id == listing_id)
+            )
+            == 0
+        )
+        # The event log keeps its entries; they just no longer point at the listing.
+        assert session.scalar(select(func.count()).select_from(Alert)) >= 2
+        assert all(a.listing_id != listing_id for a in session.scalars(select(Alert)))
+    table = client.get(product_path).text.split("<tbody>")[1].split("</tbody>")[0]
+    assert "storeone.pt" not in table
+    assert client.post(f"/listings/{listing_id}/delete", data=form_data(client)).status_code == 404

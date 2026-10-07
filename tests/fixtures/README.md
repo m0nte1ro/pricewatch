@@ -7,3 +7,4 @@ Fixture provenance:
 - `worten_outlet.html`, `fnac.html`, `darty.html`, `radiopopular.html`, `amazon_es.html`: synthetic contract fixtures. These test parsing branches, not live availability or production retailer coverage.
 
 No credentials, cookies, or account data are saved. Live price assertions are fixture observations, not current-price guarantees.
+- `radio_85c7l_promo_live.html`: reduced public Rádio Popular TCL 85C7L page retrieved 2026-10-07: the desktop product header (title, 2.499,99 price, TV20 promo-code bar at 1999,99, cart button), the product's `meta itemprop=price`, and one card from the "similar products" carousel whose own `itemprop` price/stock/sku (2.699,99) the generic microdata reader used to pick up first. The older `radio_live.html` was reduced from such a card.

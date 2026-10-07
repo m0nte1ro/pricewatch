@@ -120,7 +120,9 @@ def product_identity(product: Product) -> Identity:
 
 
 async def add_link(db, registry, product_id: int, url: str, preferences: Preferences) -> int:
-    """Fetch one pasted link and save it on an existing product; returns listings added.
+    """Fetch one pasted link and save it on an existing product.
+
+    Returns the new listing's id, or 0 when the link was already on the product.
 
     The owner chose both the product and the link, so there is no discovery step or store
     search: the page is read once and saved (a conflicting model is kept, as when pasted).
@@ -146,14 +148,15 @@ async def add_link(db, registry, product_id: int, url: str, preferences: Prefere
             ]
         )
         added = add_candidates(session, product, candidates, preferences)
+        listing_id = added[0].id if added else 0
     log.info("link_added", extra={"product_id": product_id, "retailer": adapter.name})
-    return added
+    return listing_id
 
 
 def add_candidates(
     session, product: Product, candidates: list[Candidate], preferences: Preferences | None = None
-) -> int:
-    added = 0
+) -> list[Listing]:
+    added = []
     for candidate in candidates:
         snapshot = candidate.listing
         rows = session.scalars(
@@ -204,5 +207,5 @@ def add_candidates(
         record_snapshot(session, product, listing, snapshot, initial=True)
         interval = effective_interval(listing, preferences)
         listing.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
-        added += 1
+        added.append(listing)
     return added

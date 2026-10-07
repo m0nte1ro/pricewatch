@@ -2,9 +2,10 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import delete, update
 from sqlalchemy.orm import joinedload
 
-from app.models import Listing, Product
+from app.models import Alert, Listing, PriceHistory, Product
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import now
 from app.services.listings import add_link, confirm_listing_price, verify_offer
@@ -106,6 +107,20 @@ async def add_product_link(request: Request, product_id: int):
         raise HTTPException(422, str(exc)) from None
     runtime.spawn(runtime.notifications.deliver())
     return RedirectResponse(f"/products/{product_id}?added={added}", 303)
+
+
+@router.post("/listings/{listing_id}/delete", dependencies=[Depends(protected)])
+async def delete_listing(request: Request, listing_id: int):
+    """Stop tracking a link: the listing and its price history go; events stay, unlinked."""
+    with request.app.state.runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        if listing is None:
+            raise HTTPException(404, "Listing not found")
+        product_id = listing.product_id
+        session.execute(delete(PriceHistory).where(PriceHistory.listing_id == listing_id))
+        session.execute(update(Alert).where(Alert.listing_id == listing_id).values(listing_id=None))
+        session.delete(listing)
+    return RedirectResponse(f"/products/{product_id}", 303)
 
 
 @router.post("/listings/{listing_id}/toggle", dependencies=[Depends(protected)])

@@ -4,11 +4,11 @@ import random
 from datetime import timedelta
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.models import Listing, Product
-from app.schemas.domain import Identity, now
-from app.services.listings import effective_interval, record_snapshot
-from app.services.matching import identify, match_identity, normalize
+from app.schemas.domain import now
+from app.services.listings import effective_interval, record_snapshot, verify_offer
 
 log = logging.getLogger(__name__)
 
@@ -68,44 +68,11 @@ class MonitoringService:
     async def check(self, listing_id: int):
         prefs = self.settings.get()
         with self.db.session() as session:
-            listing = session.get(Listing, listing_id)
-            product = listing.product
-            identity = Identity(
-                name=product.canonical_name,
-                brand=product.brand,
-                model=product.model,
-                size=product.size,
-                category=product.category,
-                identifiers=product.specifications,
-            )
-            # A pasted link saved despite naming another model is checked against that model,
-            # the one the owner accepted, so only a further change is flagged.
-            pasted = identify(listing.title)
-            if "manual" in listing.sources and match_identity(identity, pasted).level == "CONFLICT":
-                identity = pasted
+            listing = session.get(Listing, listing_id, options=[joinedload(Listing.product)])
         error, snapshot = None, None
         try:
             snapshots = await self.registry[listing.retailer].fetch_listing(listing.url)
-            snapshot = next(
-                (
-                    s
-                    for s in snapshots
-                    if str(s.condition) == listing.condition
-                    and normalize(s.seller) == listing.seller_key
-                ),
-                None,
-            )
-            level = (
-                match_identity(identity, snapshot.identity, snapshot.condition).level
-                if snapshot
-                else None
-            )
-            if snapshot is None:
-                error = "Original seller/condition offer is missing. Rediscover to review changed offers."
-            elif level == "CONFLICT":
-                error = "Product identity changed on retailer page; review required"
-            elif level == "LOW" and normalize(snapshot.title) != normalize(listing.title):
-                error = "Product identity can no longer be verified; review required"
+            snapshot, error = verify_offer(listing, snapshots)
         except Exception as exc:
             from app.retailers.parsing import ScrapeError
 

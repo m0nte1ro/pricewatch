@@ -7,7 +7,7 @@ from sqlalchemy.orm import joinedload
 from app.models import Listing, Product
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import now
-from app.services.listings import confirm_listing_price
+from app.services.listings import confirm_listing_price, verify_offer
 from app.web.common import (
     amount,
     confirmed_price,
@@ -132,6 +132,10 @@ def generic_listing(runtime, listing_id: int) -> Listing:
         raise HTTPException(404, "Listing not found")
     if listing.retailer in runtime.registry.adapters:
         raise HTTPException(404, "Only generic store listings can be taught")
+    if not listing.enabled or not listing.product.enabled or listing.product.archived:
+        raise HTTPException(
+            422, "This listing is not monitored: enable it, and resume or restore its product"
+        )
     return listing
 
 
@@ -139,13 +143,19 @@ def generic_listing(runtime, listing_id: int) -> Listing:
 async def listing_confirm_form(request: Request, listing_id: int):
     runtime = request.app.state.runtime
     listing = generic_listing(runtime, listing_id)
-    context = {"listing": listing, "product": listing.product}
+    context = {"listing": listing, "product": listing.product, "title": listing.title}
     try:
         snapshots = await runtime.registry[listing.retailer].fetch_listing(listing.url)
     except ScrapeError as exc:
         return render(request, "listing_confirm.html", **context, error=str(exc))
-    snapshot = snapshots[0].model_dump(mode="json")
-    return render(request, "listing_confirm.html", **context, snapshot=snapshot)
+    snapshot, error = verify_offer(listing, snapshots)
+    # Show what the page names now: after a model change the saved title would hide it.
+    context["title"] = snapshots[0].title
+    if error:
+        return render(request, "listing_confirm.html", **context, error=error)
+    return render(
+        request, "listing_confirm.html", **context, snapshot=snapshot.model_dump(mode="json")
+    )
 
 
 @router.post("/listings/{listing_id}/confirm-price", dependencies=[Depends(protected)])

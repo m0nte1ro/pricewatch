@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select
 
-from app.models import DiscoveryDraft, Listing, PriceHistory, Product, RetailerState
+from app.models import Alert, DiscoveryDraft, Listing, PriceHistory, Product, RetailerState
 from app.schemas.domain import PriceRule, now
 from tests.conftest import GENERIC_PAGES, URLS
 from tests.test_generic import OLD_PRICE_FIRST_PAGE
@@ -644,3 +644,95 @@ def test_discovered_conflicting_listing_stays_blocked(site, monkeypatch):
     assert "Conflicting models cannot be merged into this product" in response.text
     with runtime.db.session() as session:
         assert session.scalar(select(func.count()).select_from(Listing)) == 0
+
+
+MODEL_CHANGED = "Product identity changed on retailer page; review required"
+CHANGED_URL = "https://www.storeone.pt/p/tv"
+
+
+async def flag_model_change(client, runtime) -> int:
+    GENERIC_PAGES[CHANGED_URL] = STORE_PAGE
+    path, _ = discover(client, name="TCL 85C7K", urls=[CHANGED_URL], retailers=[])
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    # The store reuses the URL for another model.
+    GENERIC_PAGES[CHANGED_URL] = STORE_PAGE.replace("85C7K", "65C6K").replace("1.299,99", "499,00")
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        listing.next_check_at = now() - timedelta(minutes=1)
+        listing_id = listing.id
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        assert session.get(Listing, listing_id).last_error == MODEL_CHANGED
+    return listing_id
+
+
+async def test_confirming_a_price_on_a_changed_model_is_refused(site):
+    client, runtime, _, _ = site
+    listing_id = await flag_model_change(client, runtime)
+    response = client.post(
+        f"/listings/{listing_id}/confirm-price",
+        data=form_data(client, price="499", availability="in_stock"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 422 and MODEL_CHANGED in response.text
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        assert (listing.last_error, listing.current_price, listing.title) == (
+            MODEL_CHANGED,
+            Decimal("1299.99"),
+            'TV TCL 85C7K MiniLED 85"',
+        )
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
+        assert list(session.scalars(select(Alert.event_type))) == ["new_listing"]
+        listing.next_check_at = now() - timedelta(minutes=1)
+    assert runtime.rules.get("storeone.pt") is None
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        assert session.get(Listing, listing_id).last_error == MODEL_CHANGED
+
+
+async def test_confirm_page_shows_a_model_change_instead_of_the_form(site):
+    client, runtime, _, _ = site
+    listing_id = await flag_model_change(client, runtime)
+    page = client.get(f"/listings/{listing_id}/confirm-price").text
+    assert MODEL_CHANGED in page and 'name="price"' not in page
+    assert "TV TCL 65C6K MiniLED" in page and "85C7K MiniLED" not in page
+
+
+def test_confirm_page_shows_the_title_the_page_has_now(site):
+    client, runtime, _, _ = site
+    GENERIC_PAGES[CHANGED_URL] = STORE_PAGE
+    path, _ = discover(client, name="TCL 85C7K", urls=[CHANGED_URL], retailers=[])
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    GENERIC_PAGES[CHANGED_URL] = STORE_PAGE.replace("MiniLED", "QD-MiniLED")
+    with runtime.db.session() as session:
+        listing_id = session.scalar(select(Listing)).id
+    page = client.get(f"/listings/{listing_id}/confirm-price").text
+    assert "TV TCL 85C7K QD-MiniLED" in page and 'name="price"' in page
+
+
+@pytest.mark.parametrize(
+    ("owner", "field", "value"),
+    [("listing", "enabled", False), ("product", "enabled", False), ("product", "archived", True)],
+)
+def test_price_cannot_be_confirmed_while_a_listing_is_not_monitored(site, owner, field, value):
+    client, runtime, _, _ = site
+    GENERIC_PAGES[CHANGED_URL] = OLD_PRICE_FIRST_PAGE
+    path, _ = discover(client, name="TCL 85C7K", urls=[CHANGED_URL], retailers=[])
+    product_path = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        setattr(listing if owner == "listing" else listing.product, field, value)
+        confirm_path = f"/listings/{listing.id}/confirm-price"
+    assert confirm_path not in client.get(product_path).text
+    assert client.get(confirm_path).status_code == 422
+    response = client.post(
+        confirm_path, data=form_data(client, price="1299,99", availability="in_stock")
+    )
+    assert response.status_code == 422 and "not monitored" in response.text
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
+        assert list(session.scalars(select(Alert.event_type))) == ["new_listing"]
+    assert runtime.rules.get("storeone.pt") is None

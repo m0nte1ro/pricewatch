@@ -400,13 +400,14 @@ class GenericAdapter(RetailerAdapter):
     async def search_product(self, identity: Identity) -> list[str]:
         return []
 
-    def parse(self, html: str, url: str) -> list[Snapshot]:
+    def parse(self, html: str, url: str, *, rule: PriceRule | None = None) -> list[Snapshot]:
+        """Read the page, with `rule` in place of the store's saved rule when given."""
         soup = BeautifulSoup(html, "html.parser")
         try:
             snapshots = super().parse(html, url)
         except ScrapeError:
             snapshots = []
-        rule = self.rules.get(self.name) if self.rules else None
+        rule = rule or (self.rules.get(self.name) if self.rules else None)
         reading = read_rule(soup, rule) if rule else None
         if rule and reading is None:
             # The rule is kept: the owner re-confirms the price or forgets it in Settings.
@@ -429,9 +430,17 @@ class GenericAdapter(RetailerAdapter):
             snapshot.alternatives = price_candidates(soup)
         return [snapshot]
 
+    def preview_rule(
+        self, html: str, url: str, price: Decimal, availability: str | None
+    ) -> tuple[PriceRule, Snapshot]:
+        """Teach a rule from the confirmed price and read the page with it, without saving it."""
+        rule = teach(BeautifulSoup(html, "html.parser"), price, availability)
+        return rule, self.parse(html, url, rule=rule)[0]
+
     def learn(self, html: str, url: str, price: Decimal, availability: str | None) -> Snapshot:
-        self.rules.save(self.name, teach(BeautifulSoup(html, "html.parser"), price, availability))
-        return self.parse(html, url)[0]
+        rule, snapshot = self.preview_rule(html, url, price, availability)
+        self.rules.save(self.name, rule)
+        return snapshot
 
     def snapshot(self, reading: Reading, soup: BeautifulSoup, url: str) -> Snapshot:
         if not reading.title:

@@ -18,7 +18,12 @@ async def settings_page(request: Request, saved: bool = False):
     with runtime.db.session() as session:
         states = {s.name: s for s in session.scalars(select(RetailerState))}
     return render(
-        request, "settings.html", preferences=runtime.settings.get(), states=states, saved=saved
+        request,
+        "settings.html",
+        preferences=runtime.settings.get(),
+        states=states,
+        rules=runtime.rules.all(),
+        saved=saved,
     )
 
 
@@ -64,6 +69,12 @@ async def save_settings(request: Request):
         ) from None
     runtime.settings.save(prefs)
     return RedirectResponse("/settings?saved=true", 303)
+
+
+@router.post("/settings/rules/{host}/forget", dependencies=[Depends(protected)])
+async def forget_rule(request: Request, host: str):
+    request.app.state.runtime.rules.delete(host)
+    return RedirectResponse("/settings", 303)
 
 
 @router.get("/alerts")

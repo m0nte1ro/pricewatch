@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import DiscoveryDraft, Listing, PriceHistory, Product, RetailerState
-from app.schemas.domain import now
+from app.schemas.domain import PriceRule, now
 from tests.conftest import GENERIC_PAGES, URLS
 
 STORE_PAGE = """<html><head><title>TV TCL 85C7K | Store One</title></head><body><main class="product">
@@ -393,3 +393,34 @@ def test_redirect_to_a_non_public_host_is_never_followed(site):
     _, page = discover(client, name="TCL 85C7K", urls=["https://www.storeone.pt/p/r"], retailers=[])
     assert "Manual URL (www.storeone.pt): Retailer request failed" in page.text
     assert requests == ["https://www.storeone.pt/p/r"]
+
+
+def test_settings_lists_and_forgets_store_rules(site):
+    client, runtime, _, _ = site
+    runtime.rules.save("storeone.pt", PriceRule(price_selector="span.price-current"))
+    page = client.get("/settings").text
+    assert "storeone.pt" in page and "span.price-current" in page
+    response = client.post(
+        "/settings/rules/storeone.pt/forget", data=form_data(client), follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert runtime.rules.get("storeone.pt") is None
+    assert "No store rules yet" in client.get("/settings").text
+
+
+def test_forgetting_a_store_without_a_rule_returns_to_settings(site):
+    client, _, _, _ = site
+    client.get("/settings")
+    response = client.post(
+        "/settings/rules/unknown.pt/forget", data=form_data(client), follow_redirects=False
+    )
+    assert (response.status_code, response.headers["location"]) == (303, "/settings")
+
+
+def test_forgetting_a_store_rule_requires_the_form_token(site):
+    client, runtime, _, _ = site
+    runtime.rules.save("storeone.pt", PriceRule(price_selector="span.price-current"))
+    client.get("/settings")
+    response = client.post("/settings/rules/storeone.pt/forget", data={"csrf": "wrong"})
+    assert response.status_code == 403
+    assert runtime.rules.get("storeone.pt") is not None

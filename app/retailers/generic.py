@@ -1,6 +1,8 @@
 import ipaddress
+import logging
 import re
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import islice
@@ -10,8 +12,10 @@ from bs4 import BeautifulSoup, Tag
 
 from app.retailers.base import RetailerAdapter
 from app.retailers.parsing import ScrapeError, availability, condition, money, text_at
-from app.schemas.domain import Condition, Identity, PriceCandidate, Snapshot
+from app.schemas.domain import Condition, Identity, PriceCandidate, PriceRule, Snapshot
 from app.services.matching import identify
+
+log = logging.getLogger(__name__)
 
 PRICE_HINT = re.compile(r"price|pre[cç]o|valor|amount", re.I)
 OLD_HINT = re.compile(
@@ -209,14 +213,17 @@ def price_candidates(soup: BeautifulSoup) -> list[PriceCandidate]:
     return candidates
 
 
+def _cart_button(button: Tag) -> bool:
+    label = f"{button.get_text(' ', strip=True)} {button.get('value', '')}"
+    return not button.has_attr("disabled") and bool(CART_HINT.search(label))
+
+
 def heuristic_availability(soup: BeautifulSoup) -> str:
     for tag in soup.find_all(lambda t: bool(STOCK_HINT.search(_hints(t)))):
         if (state := availability(tag.get_text(" ", strip=True))) != "unknown":
             return state
-    for button in soup.select("button, input[type=submit]"):
-        label = f"{button.get_text(' ', strip=True)} {button.get('value', '')}"
-        if not button.has_attr("disabled") and CART_HINT.search(label):
-            return "in_stock"
+    if any(_cart_button(b) for b in soup.select("button, input[type=submit]")):
+        return "in_stock"
     text = soup.get_text(" ", strip=True).casefold()
     return "out_of_stock" if any(x in text for x in OUT_OF_STOCK_TEXT) else "unknown"
 
@@ -264,6 +271,65 @@ def read_heuristic(soup: BeautifulSoup) -> Reading:
     )
 
 
+def _rule_availability(soup: BeautifulSoup, rule: PriceRule) -> str:
+    if rule.availability_selector is None:
+        return heuristic_availability(soup)
+    element = soup.select_one(rule.availability_selector)
+    if rule.availability_mode == "presence":
+        # A disabled cart button is how many stores show an item they cannot sell.
+        present = element is not None and not element.has_attr("disabled")
+        return "in_stock" if present else "out_of_stock"
+    return availability(element.get_text(" ", strip=True)) if element is not None else "unknown"
+
+
+def read_rule(soup: BeautifulSoup, rule: PriceRule) -> Reading | None:
+    element = soup.select_one(rule.price_selector)
+    text = element.get_text(" ", strip=True) if element is not None else ""
+    if (price := money(text)) is None:
+        return None
+    return Reading(
+        title=page_title(soup),
+        price=price,
+        currency=currency_of(text),
+        availability=_rule_availability(soup, rule),
+        method="rule",
+        alternatives=[],
+    )
+
+
+def _shortest(soup: BeautifulSoup, limit: int, accept: Callable[[str], bool]) -> Tag | None:
+    found = None
+    for element in soup.find_all(lambda t: t.name not in ("script", "style")):
+        text = element.get_text(" ", strip=True)
+        # Strictly shorter only, so equal lengths keep the first in document order.
+        if len(text) <= limit and accept(text) and (found is None or len(text) < found[0]):
+            found = (len(text), element)
+    return found[1] if found else None
+
+
+def _stock_rule(soup: BeautifulSoup, state: str | None) -> tuple[str | None, str]:
+    if state in ("in_stock", "out_of_stock"):
+        if element := _shortest(soup, 60, lambda text: availability(text) == state):
+            return css_path(element, soup), "text"
+    if state == "in_stock":
+        for button in soup.select("button, input[type=submit]"):
+            if _cart_button(button):
+                return css_path(button, soup), "presence"
+    return None, "text"
+
+
+def teach(soup: BeautifulSoup, price: Decimal, availability: str | None) -> PriceRule:
+    element = _shortest(soup, 40, lambda text: money(text) == price)
+    if element is None:
+        raise ScrapeError(f"Could not find a price of {price} on the page")
+    selector, mode = _stock_rule(soup, availability)
+    return PriceRule(
+        price_selector=css_path(element, soup),
+        availability_selector=selector,
+        availability_mode=mode,
+    )
+
+
 class GenericAdapter(RetailerAdapter):
     status = "generic"
     status_note = "Generic reader: structured data, meta tags, then heuristics. Confirm the price once per store to teach it the right element."
@@ -296,14 +362,32 @@ class GenericAdapter(RetailerAdapter):
             snapshots = super().parse(html, url)
         except ScrapeError:
             snapshots = []
+        rule = self.rules.get(self.name) if self.rules else None
+        reading = read_rule(soup, rule) if rule else None
+        if rule and reading is None:
+            # The rule is kept: the owner re-confirms the price or forgets it in Settings.
+            log.warning("store_rule_failed", extra={"retailer": self.name})
         # Structured data without a price is a miss: the page itself may still show one.
-        snapshot = next((s for s in snapshots if s.price is not None), None)
-        if snapshot is None:
-            snapshot = self.snapshot(read_meta(soup) or read_heuristic(soup), soup, url)
+        priced = next((s for s in snapshots if s.price is not None), None)
+        if reading is None and priced is not None:
+            priced.alternatives = price_candidates(soup)
+            return [priced]
+        reading = reading or read_meta(soup) or read_heuristic(soup)
+        if snapshots:
+            # Structured data still names the product and states its stock when the page
+            # reading cannot; out-of-stock must not turn into "unknown".
+            reading.title = reading.title or snapshots[0].title
+            if reading.availability == "unknown":
+                reading.availability = snapshots[0].availability
+        snapshot = self.snapshot(reading, soup, url)
         # A heuristic reading already holds the page's candidates.
         if snapshot.method != "heuristic":
             snapshot.alternatives = price_candidates(soup)
         return [snapshot]
+
+    def learn(self, html: str, url: str, price: Decimal, availability: str | None) -> Snapshot:
+        self.rules.save(self.name, teach(BeautifulSoup(html, "html.parser"), price, availability))
+        return self.parse(html, url)[0]
 
     def snapshot(self, reading: Reading, soup: BeautifulSoup, url: str) -> Snapshot:
         if not reading.title:

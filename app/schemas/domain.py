@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -57,6 +58,12 @@ class Snapshot(BaseModel):
         if value is not None and (not value.is_finite() or value <= 0):
             raise ValueError("Price must be a positive finite amount")
         return value.quantize(Decimal("0.01")) if value is not None else None
+
+
+class PriceRule(BaseModel):
+    price_selector: str
+    availability_selector: str | None = None
+    availability_mode: Literal["text", "presence"] = "text"
 
 
 class Match(BaseModel):

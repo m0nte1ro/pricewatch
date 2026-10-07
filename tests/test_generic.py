@@ -13,11 +13,15 @@ from app.retailers.generic import (
     public_host,
     read_heuristic,
     read_meta,
+    read_rule,
     store_key,
+    teach,
 )
 from app.retailers.http import Fetcher
 from app.retailers.parsing import ScrapeError
 from app.retailers.registry import Registry
+from app.schemas.domain import PriceRule
+from app.services.rules import RuleService
 
 
 def soup(html):
@@ -330,3 +334,147 @@ def test_structured_data_without_a_price_falls_through_to_the_page():
         "https://www.storeone.pt/p",
     )[0]
     assert (snapshot.method, snapshot.price) == ("heuristic", Decimal("1299.99"))
+
+
+def test_price_less_structured_data_keeps_its_out_of_stock_state():
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt")
+    snapshot = adapter.parse(
+        '<h1>TCL 85C7K</h1><script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"availability":"https://schema.org/OutOfStock"}}</script>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.method, snapshot.price, snapshot.availability) == (
+        "heuristic",
+        None,
+        "out_of_stock",
+    )
+
+
+def test_price_less_structured_data_names_a_page_without_a_title():
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt")
+    snapshot = adapter.parse(
+        '<script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"availability":"https://schema.org/InStock"}}</script>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.title, snapshot.price, snapshot.availability) == (
+        "TCL 85C7K",
+        None,
+        "in_stock",
+    )
+
+
+OLD_PRICE_FIRST_PAGE = """<html><head><title>TV TCL 85C7K | Store One</title></head><body><main class="product"><h1>TV TCL 85C7K</h1>
+<span class="price">1.499,00 €</span> <span class="price">1.299,99 €</span><div class="stock">Em stock</div></main></body></html>"""
+
+
+def test_teach_derives_selectors():
+    s = soup(HEURISTIC_PAGE)
+    rule = teach(s, Decimal("1299.99"), "in_stock")
+    assert s.select_one(rule.price_selector).get_text(strip=True) == "1.299,99 €"
+    assert rule.availability_mode == "text"
+    assert s.select_one(rule.availability_selector).get_text(strip=True) == "Em stock"
+    reading = read_rule(s, rule)
+    assert (reading.price, reading.availability, reading.method) == (
+        Decimal("1299.99"),
+        "in_stock",
+        "rule",
+    )
+
+
+def test_teach_uses_cart_button_presence_when_no_stock_text():
+    s = soup(
+        '<h1>P</h1><span class="amount">999 €</span><button class="add">Adicionar ao carrinho</button>'
+    )
+    rule = teach(s, Decimal("999"), "in_stock")
+    assert rule.availability_mode == "presence"
+    assert read_rule(s, rule).availability == "in_stock"
+    assert (
+        read_rule(soup('<h1>P</h1><span class="amount">999 €</span>'), rule).availability
+        == "out_of_stock"
+    )
+
+
+def test_teach_picks_most_specific_element_and_rejects_unknown_price():
+    s = soup(
+        '<div class="box"><span class="v">999 €</span><p class="note">Também por 999 € em loja</p></div>'
+    )
+    assert teach(s, Decimal("999"), None).price_selector.endswith("span.v")
+    with pytest.raises(ScrapeError):
+        teach(soup(HEURISTIC_PAGE), Decimal("5"), None)
+
+
+def test_rule_service_round_trip(db):
+    rules = RuleService(db)
+    assert rules.get("storeone.pt") is None
+    rules.save("storeone.pt", PriceRule(price_selector="span.a"))
+    rules.save("storeone.pt", PriceRule(price_selector="span.b", availability_selector="div.s"))
+    assert rules.get("storeone.pt").price_selector == "span.b"
+    assert list(rules.all()) == ["storeone.pt"]
+    rules.delete("storeone.pt")
+    assert rules.get("storeone.pt") is None
+
+
+def test_learn_saves_rule_and_reparses(db):
+    rules = RuleService(db)
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules)
+    assert adapter.parse(OLD_PRICE_FIRST_PAGE, "https://www.storeone.pt/p")[0].price == Decimal(
+        "1499.00"
+    )
+    snapshot = adapter.learn(
+        OLD_PRICE_FIRST_PAGE, "https://www.storeone.pt/p", Decimal("1299.99"), "in_stock"
+    )
+    assert (snapshot.price, snapshot.method, snapshot.availability) == (
+        Decimal("1299.99"),
+        "rule",
+        "in_stock",
+    )
+    assert rules.get("storeone.pt") is not None
+    assert adapter.parse(OLD_PRICE_FIRST_PAGE, "https://www.storeone.pt/p")[0].method == "rule"
+
+
+def test_broken_rule_falls_back_and_flags(db):
+    rules = RuleService(db)
+    rules.save("storeone.pt", PriceRule(price_selector="span.gone"))
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules)
+    snapshot = adapter.parse(HEURISTIC_PAGE, "https://www.storeone.pt/p")[0]
+    assert (snapshot.method, snapshot.price) == ("heuristic", Decimal("1299.99"))
+    assert rules.get("storeone.pt") is not None  # kept so the user can re-confirm or forget it
+
+
+def test_broken_rule_is_logged_with_its_store(db, caplog):
+    rules = RuleService(db)
+    rules.save("storeone.pt", PriceRule(price_selector="span.gone"))
+    GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules).parse(
+        HEURISTIC_PAGE, "https://www.storeone.pt/p"
+    )
+    assert [(r.getMessage(), r.retailer) for r in caplog.records] == [
+        ("store_rule_failed", "storeone.pt")
+    ]
+
+
+def test_rule_reading_wins_over_structured_data_and_offers_the_page_candidates(db):
+    rules = RuleService(db)
+    rules.save("storeone.pt", PriceRule(price_selector="span.price-current"))
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules)
+    snapshot = adapter.parse(
+        '<h1>TCL 85C7K</h1><script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"price":"1499.00","availability":"https://schema.org/OutOfStock"}}</script>'
+        '<span class="price-current">1.299,99 €</span>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.method, snapshot.price) == ("rule", Decimal("1299.99"))
+    assert [c.price for c in snapshot.alternatives] == [Decimal("1299.99")]
+
+
+def test_rule_reading_keeps_structured_out_of_stock_state(db):
+    rules = RuleService(db)
+    rules.save("storeone.pt", PriceRule(price_selector="span.price-current"))
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules)
+    snapshot = adapter.parse(
+        '<h1>TCL 85C7K</h1><script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"availability":"https://schema.org/OutOfStock"}}</script>'
+        '<span class="price-current">1.299,99 €</span>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.method, snapshot.availability) == ("rule", "out_of_stock")

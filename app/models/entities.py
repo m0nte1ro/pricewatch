@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from decimal import Decimal
 
@@ -21,7 +22,10 @@ from app.schemas.domain import lower_price, now
 
 class Product(Base):
     __tablename__ = "products"
+    __table_args__ = (UniqueConstraint("uid", name="uq_products_uid"),)
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Travels with exports, so importing the same file twice finds the product it created.
+    uid: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid.uuid4()))
     canonical_name: Mapped[str] = mapped_column(String(250))
     brand: Mapped[str | None] = mapped_column(String(100))
     model: Mapped[str | None] = mapped_column(String(100), index=True)

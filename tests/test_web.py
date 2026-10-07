@@ -1061,3 +1061,21 @@ def test_kuantokusta_link_shows_where_the_lowest_price_is(site):
             Decimal("1748.18"),
             "Hipermercado · free shipping",
         )
+
+
+def test_export_and_import_through_settings(site):
+    client, runtime, _, _ = site
+    saved_product(client)
+    response = client.get("/export")
+    assert response.status_code == 200
+    assert "attachment" in response.headers["content-disposition"]
+    data = response.json()
+    assert data["products"][0]["canonical_name"] == "TCL 85C7K"
+    upload = {"file": ("pricewatch.json", json.dumps(data).encode(), "application/json")}
+    result = client.post("/import", data=form_data(client), files=upload)
+    assert result.status_code == 200
+    assert "Nothing new to add" in result.text  # same database: no changes
+    assert client.post("/import", data={"csrf": "wrong"}, files=upload).status_code == 403
+    bad = {"file": ("x.json", b"not json", "application/json")}
+    assert client.post("/import", data=form_data(client), files=bad).status_code == 422
+    assert 'action="/import"' in client.get("/settings").text

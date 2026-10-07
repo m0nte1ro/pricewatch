@@ -36,6 +36,25 @@ LOCAL_SUFFIXES = (
 )
 OUT_OF_STOCK_TEXT = ("esgotado", "indisponível", "sem stock", "fora de stock", "out of stock")
 CURRENCIES = (("EUR", "€"), ("GBP", "£"), ("USD", "$"))
+CURRENCY_MARK = re.compile(r"[€$£]|EUR|GBP|USD", re.I)
+# Exact vocabulary only: parsing.availability() matches substrings, and "in stock" is inside
+# Spanish "sin stock".
+META_STOCK = {
+    **dict.fromkeys(("instock", "in stock", "in_stock", "available"), "in_stock"),
+    **dict.fromkeys(
+        (
+            "oos",
+            "out of stock",
+            "outofstock",
+            "out_of_stock",
+            "soldout",
+            "sold out",
+            "discontinued",
+        ),
+        "out_of_stock",
+    ),
+    **dict.fromkeys(("preorder", "pre-order", "backorder"), "preorder"),
+}
 
 
 @dataclass
@@ -109,19 +128,35 @@ def _selects_only(soup: BeautifulSoup, path: str, element: Tag) -> bool:
     return len(found) == 1 and found[0] is element
 
 
+def _nth(tag: Tag) -> str:
+    return f":nth-of-type({len(tag.find_previous_siblings(tag.name)) + 1})"
+
+
+def _positional_path(element: Tag, soup: BeautifulSoup) -> str:
+    parts, node = [], element
+    while node is not None and not isinstance(node, BeautifulSoup):
+        segment, anchored = _segment(node)
+        if anchored and len(soup.select(segment, limit=2)) == 1:
+            parts.append(segment)
+            break
+        parts.append(segment + _nth(node))
+        node = node.parent
+    return " > ".join(reversed(parts))
+
+
 def css_path(element: Tag, soup: BeautifulSoup) -> str:
     path, anchored = _segment(element)
     if len(soup.select(path, limit=2)) > 1:
-        path += f":nth-of-type({len(element.find_previous_siblings(element.name)) + 1})"
-    node = element
-    for _ in range(6):
-        if anchored or _selects_only(soup, path, element):
-            break
+        path += _nth(element)
+    node, levels = element, 0
+    while not _selects_only(soup, path, element):
         node = node.parent
-        if node is None or isinstance(node, BeautifulSoup):
-            break
+        if anchored or levels == 6 or node is None or isinstance(node, BeautifulSoup):
+            # A position on every step pins one element below a unique id or a single root.
+            return _positional_path(element, soup)
         segment, anchored = _segment(node)
         path = f"{segment} > {path}"
+        levels += 1
     return path
 
 
@@ -147,14 +182,20 @@ def price_candidates(soup: BeautifulSoup) -> list[PriceCandidate]:
     found = []
     for element in soup.find_all(_priced):
         text = element.get_text(" ", strip=True)
-        if len(text) <= 40 and (price := money(text)) is not None:
+        # A wrapper around an old and a current price would read as one long number.
+        if (
+            len(text) <= 40
+            and len(CURRENCY_MARK.findall(text)) <= 1
+            and (price := money(text)) is not None
+        ):
             found.append((_score(element), element, price, text))
-    candidates, seen = [], set()
+    candidates = []
     # sorted() is stable, so equal scores keep document order.
     for _, element, price, text in sorted(found, key=lambda item: -item[0]):
         selector = css_path(element, soup)
-        if selector not in seen:
-            seen.add(selector)
+        # Pages without a single root element can defeat even a positional path. A selector
+        # that reaches only its own element is never shared, so this also drops duplicates.
+        if _selects_only(soup, selector, element):
             candidates.append(PriceCandidate(selector=selector, price=price, text=text))
             if len(candidates) == 8:
                 break
@@ -180,16 +221,24 @@ def _meta(soup: BeautifulSoup, name: str) -> str:
     ).strip()
 
 
+def _meta_availability(soup: BeautifulSoup) -> str:
+    tags = 'meta[property="product:availability"], meta[property="og:availability"]'
+    if soup.select_one(tags) is None:
+        return heuristic_availability(soup)
+    # Meta readings can raise deal alerts, so an unrecognised value stays unknown rather than
+    # being replaced by page guesses. Schema.org URLs map by their last path segment.
+    return META_STOCK.get(_meta(soup, "availability").lower().rsplit("/", 1)[-1], "unknown")
+
+
 def read_meta(soup: BeautifulSoup) -> Reading | None:
     price = money(_meta(soup, "price:amount"))
     if price is None:
         return None
-    stock = availability(_meta(soup, "availability"))
     return Reading(
         title=page_title(soup),
         price=price,
         currency=_meta(soup, "price:currency").upper() or "EUR",
-        availability=stock if stock != "unknown" else heuristic_availability(soup),
+        availability=_meta_availability(soup),
         method="meta",
         alternatives=[],
     )

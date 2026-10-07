@@ -8,6 +8,7 @@ from app.retailers.generic import (
     currency_of,
     heuristic_availability,
     page_title,
+    price_candidates,
     public_host,
     read_heuristic,
     read_meta,
@@ -142,3 +143,91 @@ def test_store_key():
 )
 def test_currency_of(text, expected):
     assert currency_of(text) == expected
+
+
+def test_wrapper_holding_two_whole_prices_is_not_a_candidate():
+    candidates = price_candidates(
+        soup(
+            '<main class="product"><div class="product-price"><span class="old-price">1499 €</span>'
+            '<span class="price-current">1299 €</span></div></main>'
+        )
+    )
+    assert (candidates[0].selector, candidates[0].price) == (
+        "span.price-current",
+        Decimal("1299.00"),
+    )
+    assert all(c.price < 10000 for c in candidates)
+
+
+def test_split_cents_price_reads_as_one_amount():
+    candidates = price_candidates(soup('<span class="price">783 <sup>,57 €</sup></span>'))
+    assert candidates[0].price == Decimal("783.57")
+
+
+NESTED_PAGE = (
+    '<div class="carousel">'
+    + "<div>" * 8
+    + '<span class="price">1,00 €</span>'
+    + "</div>" * 8
+    + '</div><div class="product">'
+    + "<div>" * 8
+    + '<span class="price">2,00 €</span>'
+    + "</div>" * 8
+    + "</div>"
+)
+
+
+def test_candidate_selector_points_at_the_element_it_reports():
+    s = soup(NESTED_PAGE)
+    candidates = price_candidates(s)
+    assert [c.price for c in candidates] == [Decimal("2.00"), Decimal("1.00")]
+    assert [s.select_one(c.selector).get_text(" ", strip=True) for c in candidates] == [
+        "2,00 €",
+        "1,00 €",
+    ]
+
+
+def test_css_path_selects_exactly_its_element_when_short_paths_are_ambiguous():
+    s = soup(NESTED_PAGE)
+    first = s.select("span.price")[0]
+    found = s.select(css_path(first, s))
+    assert len(found) == 1 and found[0] is first
+
+
+def test_candidate_is_dropped_when_no_selector_reaches_only_its_element():
+    # Without a single root element, a deeper copy of the top-level chain matches first.
+    s = soup(
+        '<div><div></div><div><span class="price">9 €</span></div></div>'
+        '<div><span class="price">5 €</span></div>'
+    )
+    assert [c.price for c in price_candidates(s)] == [Decimal("9.00")]
+
+
+META_PRICE = '<meta property="product:price:amount" content="10">'
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("out of stock", "out_of_stock"), ("oos", "out_of_stock"), ("weird", "unknown")],
+)
+def test_meta_availability_is_never_replaced_by_the_cart_button(value, expected):
+    page = f'{META_PRICE}<meta property="product:availability" content="{value}"><button>Comprar</button>'
+    assert read_meta(soup(page)).availability == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("in stock", "in_stock"),
+        (" InStock ", "in_stock"),
+        ("https://schema.org/SoldOut", "out_of_stock"),
+        ("pre-order", "preorder"),
+    ],
+)
+def test_meta_availability_vocabulary(value, expected):
+    page = f'{META_PRICE}<meta property="og:availability" content="{value}"><p>Esgotado</p>'
+    assert read_meta(soup(page)).availability == expected
+
+
+def test_meta_without_availability_tag_falls_back_to_the_page():
+    assert read_meta(soup(f"{META_PRICE}<button>Comprar</button>")).availability == "in_stock"

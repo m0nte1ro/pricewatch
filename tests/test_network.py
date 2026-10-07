@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import httpx
@@ -6,7 +7,7 @@ from sqlalchemy import select
 
 from app.models import Alert, Product, RetailerState
 from app.notifications.ntfy import NtfyProvider
-from app.retailers.http import Fetcher
+from app.retailers.http import Fetcher, interactive
 from app.retailers.parsing import BlockedError, RateLimitedError, ScrapeError
 from app.schemas.domain import Preferences, now
 from app.services.notifications import NotificationService
@@ -194,3 +195,25 @@ async def test_alerts_saved_during_delivery_are_sent_in_the_same_run(db):
     service = NotificationService(db, settings, SlowProvider)
     await service.deliver()
     assert sent == ["first", "second"]
+
+
+async def test_interactive_requests_do_not_sit_through_rate_limit_waits(db):
+    # Someone is watching a spinner: a 429 fails at once instead of waiting 60 s twice.
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": "60"})
+
+    fetcher = Fetcher(
+        db, lambda: Preferences(), transport=httpx.MockTransport(respond), min_delay=0
+    )
+    token = interactive.set(True)
+    try:
+        with pytest.raises(RateLimitedError):
+            await asyncio.wait_for(
+                fetcher.get("https://www.darty.pt/", "darty", ("www.darty.pt",)), 5
+            )
+    finally:
+        interactive.reset(token)
+    assert len(calls) == 1

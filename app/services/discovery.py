@@ -6,9 +6,10 @@ from urllib.parse import urlsplit
 
 from app.models import DiscoveryDraft, Product
 from app.retailers.generic import GenericAdapter
-from app.retailers.parsing import ScrapeError
+from app.retailers.http import user_waiting
+from app.retailers.parsing import BlockedError, ScrapeError
 from app.schemas.domain import Candidate, Condition, Identity
-from app.services.listings import add_candidates
+from app.services.listings import add_candidates, unread_snapshot
 from app.services.matching import deduplicate, identify, match_identity
 
 log = logging.getLogger(__name__)
@@ -31,7 +32,8 @@ class DiscoveryService:
     async def run(self, draft_id: str):
         async with self.capacity:
             try:
-                await asyncio.wait_for(self._discover(draft_id), self.timeout)
+                with user_waiting():
+                    await asyncio.wait_for(self._discover(draft_id), self.timeout)
             except TimeoutError:
                 log.warning("discovery_timed_out")
                 self._fail(
@@ -76,6 +78,13 @@ class DiscoveryService:
                     continue
                 seen_urls.add(url)
                 manual.extend(await adapter.fetch_listing(url, alternatives=True))
+            except BlockedError as exc:
+                # The store refuses requests right now; a pasted link is still kept.
+                manual.append(unread_snapshot(adapter, url))
+                errors.append(
+                    f"Manual URL ({urlsplit(url).hostname}): {exc} "
+                    "The link is kept and read automatically once the store allows it."
+                )
             except (ScrapeError, ValueError) as exc:
                 errors.append(f"Manual URL ({urlsplit(url).hostname}): {exc}")
             except Exception:
@@ -182,7 +191,8 @@ class DiscoveryService:
         adapter = self.registry.for_url(url)
         if not isinstance(adapter, GenericAdapter):
             raise ValueError("Only generic stores can be taught")
-        html = await adapter.fetcher.get(url, adapter.name, adapter.hosts)
+        with user_waiting():
+            html = await adapter.fetcher.get(url, adapter.name, adapter.hosts)
         snapshot = adapter.learn(html, url, price, availability)
         with self.db.session() as session:
             draft = session.get(DiscoveryDraft, draft_id)

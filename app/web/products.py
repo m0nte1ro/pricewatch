@@ -6,6 +6,7 @@ from sqlalchemy import delete, update
 from sqlalchemy.orm import joinedload
 
 from app.models import Alert, Listing, PriceHistory, Product
+from app.retailers.http import user_waiting
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import now
 from app.services.listings import add_link, confirm_listing_price, verify_offer
@@ -179,7 +180,8 @@ async def listing_confirm_form(request: Request, listing_id: int):
     context = {"listing": listing, "product": listing.product, "title": listing.title}
     try:
         adapter = runtime.registry[listing.retailer]
-        snapshots = await adapter.fetch_listing(listing.url, alternatives=True)
+        with user_waiting():
+            snapshots = await adapter.fetch_listing(listing.url, alternatives=True)
     except ScrapeError as exc:
         return render(request, "listing_confirm.html", **context, error=str(exc))
     snapshot, error = verify_offer(listing, snapshots)

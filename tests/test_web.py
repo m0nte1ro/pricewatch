@@ -220,10 +220,11 @@ def test_no_listings_page_opens_discovery_notes(site):
     client, runtime, prices, _ = site
     for name in URLS:
         prices[name] = "blocked"
-    _, page = discover(client, urls=[URLS["worten"]])
+    # Search only: a pasted link would be kept as "not read yet" instead (see below).
+    _, page = discover(client, urls=[])
     assert "No listings found" in page.text
     assert '<details class="panel warnings" open>' in page.text
-    assert "Manual URL" in page.text
+    assert "Retailer returned HTTP 403" in page.text
 
 
 def test_restart_lifts_cooldowns(site):
@@ -979,3 +980,56 @@ def test_promo_code_price_is_shown_with_its_code(site):
     assert "with code TV20" in product.split('class="stats"')[1].split("</div></div>")[0]
     table = product.split("<tbody>")[1]
     assert "€1,199.00" in table and "€999.00 with code TV20" in table
+
+
+async def test_a_link_the_store_refuses_is_kept_and_read_later(site):
+    client, runtime, prices, _ = site
+    prices["darty"] = "rate_limited"
+    started = time.monotonic()
+    path, page = discover(client, urls=[URLS["darty"]], retailers=[])
+    assert time.monotonic() - started < 5  # no 60-second Retry-After waits
+    assert "is kept and read automatically" in page.text
+    assert 'value="0" checked' in page.text and "not read yet" in page.text
+    product_path = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert (listing.retailer, listing.current_price, listing.extraction_method) == (
+            "darty",
+            None,
+            "unread",
+        )
+        assert "Not read yet" in listing.last_error
+        assert listing.next_check_at <= now() + timedelta(minutes=16)
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+    assert "Not read yet" in client.get(product_path).text
+    # The store allows it again: the next check reads it like any other listing.
+    prices["darty"] = "1199.00"
+    runtime.fetcher.retry_now()
+    with runtime.db.session() as session:
+        session.scalar(select(Listing)).next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert (listing.current_price, listing.extraction_method, listing.last_error) == (
+            Decimal("1199.00"),
+            "structured",
+            None,
+        )
+        assert (listing.seller, listing.condition) == ("darty", "new")
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
+
+
+def test_add_link_keeps_a_link_the_store_refuses(site):
+    client, runtime, prices, _ = site
+    product_path = saved_product(client)
+    prices["darty"] = "rate_limited"
+    response = client.post(
+        product_path + "/links", data=form_data(client, url=URLS["darty"]), follow_redirects=False
+    )
+    page = client.get(response.headers["location"]).text
+    assert "Added Darty Portugal: not read yet" in page
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing).where(Listing.retailer == "darty"))
+        assert listing.extraction_method == "unread"

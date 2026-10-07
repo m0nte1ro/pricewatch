@@ -104,6 +104,9 @@ def site(db, tmp_path):
         )
         if is_search:
             return httpx.Response(200, text=f'<a href="{URLS[retailer]}">TCL 85C7K</a>')
+        if prices[retailer] == "rate_limited":
+            # Live Darty: Retry-After 60 on every request. Interactive paths must not wait.
+            return httpx.Response(429, headers={"Retry-After": "60"})
         if prices[retailer] == "blocked":
             return httpx.Response(403, text="Forbidden")
         data = {

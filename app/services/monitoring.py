@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import random
+from contextlib import nullcontext
 from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.models import Listing, Product
+from app.retailers.http import user_waiting
 from app.schemas.domain import now
 from app.services.listings import effective_interval, record_snapshot, verify_offer
 
@@ -60,8 +62,11 @@ class MonitoringService:
                 async with semaphore:
                     await self.check(listing_id)
 
-            for offset in range(0, len(ids), 50):
-                await asyncio.gather(*(bounded(i) for i in ids[offset : offset + 50]))
+            # "Check now" has someone waiting: a rate-limited store fails at once (see
+            # user_waiting); scheduled checks keep honouring Retry-After.
+            with user_waiting() if force else nullcontext():
+                for offset in range(0, len(ids), 50):
+                    await asyncio.gather(*(bounded(i) for i in ids[offset : offset + 50]))
             self.last_run, self.last_summary = now(), f"Checked {len(ids)} listings"
             await self.notifications.deliver()
 

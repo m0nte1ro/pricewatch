@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -12,6 +14,20 @@ from app.retailers.parsing import BlockedError, RateLimitedError, ScrapeError
 from app.schemas.domain import Preferences, now
 
 log = logging.getLogger(__name__)
+
+# True while someone waits on the result (adding a product or link, Check now, confirming
+# a price): a rate-limited store then fails at once instead of sitting through Retry-After
+# waits. Scheduled checks run without it and stay patient.
+interactive: ContextVar[bool] = ContextVar("interactive", default=False)
+
+
+@contextmanager
+def user_waiting():
+    token = interactive.set(True)
+    try:
+        yield
+    finally:
+        interactive.reset(token)
 
 
 def retry_after(value: str | None) -> float | None:
@@ -151,7 +167,11 @@ class Fetcher:
                                 return html
                         raise ScrapeError("Too many retailer redirects")
                     except BlockedError as exc:
-                        if isinstance(exc, RateLimitedError) and attempt < 2:
+                        if (
+                            isinstance(exc, RateLimitedError)
+                            and attempt < 2
+                            and not interactive.get()
+                        ):
                             # Slow down and retry this request instead of dropping the store.
                             wait = (
                                 exc.retry_after if exc.retry_after is not None else 10 * 3**attempt

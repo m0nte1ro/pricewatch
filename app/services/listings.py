@@ -1,24 +1,61 @@
 import logging
 import random
+import re
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
 from app.models import Listing, PriceHistory, Product
 from app.retailers.generic import GenericAdapter
-from app.retailers.parsing import ScrapeError
+from app.retailers.http import user_waiting
+from app.retailers.parsing import BlockedError, ScrapeError
 from app.schemas.domain import Candidate, Identity, Preferences, Snapshot, now
 from app.services.alerts import evaluate
 from app.services.matching import deduplicate, identify, match_identity, normalize
 
 log = logging.getLogger(__name__)
 
+# A pasted link kept while its store refuses requests: saved now, read on a later check.
+UNREAD = "unread"
+NOT_READ = "Not read yet: the store refused requests. It is read automatically on a later check."
+UNREAD_RETRY = timedelta(minutes=15)
+
+
+def unread_snapshot(adapter, url: str) -> Snapshot:
+    """A placeholder for a link the store would not serve; the URL slug names the product."""
+    slug = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+    title = re.sub(r"[-_]+", " ", slug).strip() or adapter.label
+    return Snapshot(
+        retailer=adapter.name,
+        url=url,
+        identity=identify(title),
+        title=title,
+        availability="unknown",
+        condition=adapter.default_condition,
+        method=UNREAD,
+    )
+
 
 def record_snapshot(
     session, product: Product, listing: Listing, snapshot: Snapshot, *, initial: bool = False
 ):
-    evaluate(session, product, listing, snapshot, initial=initial)
+    if snapshot.method == UNREAD:
+        # Nothing was observed: no history row and no events until the page is read.
+        listing.title, listing.extraction_method, listing.last_error = (
+            snapshot.title,
+            UNREAD,
+            NOT_READ,
+        )
+        return
+    first_read = listing.extraction_method == UNREAD
+    if first_read:
+        # The placeholder guessed seller and condition; the page now says what they are.
+        listing.condition, listing.seller = str(snapshot.condition), snapshot.seller
+        listing.seller_key = normalize(snapshot.seller)
+        listing.retailer_product_id = snapshot.retailer_product_id
+    evaluate(session, product, listing, snapshot, initial=initial or first_read)
     session.add(
         PriceHistory(
             listing_id=listing.id,
@@ -57,13 +94,18 @@ def verify_offer(listing: Listing, snapshots: list[Snapshot]) -> tuple[Snapshot 
     pasted = identify(listing.title)
     if "manual" in listing.sources and match_identity(identity, pasted).level == "CONFLICT":
         identity = pasted
-    snapshot = next(
-        (
-            s
-            for s in snapshots
-            if str(s.condition) == listing.condition and normalize(s.seller) == listing.seller_key
-        ),
-        None,
+    snapshot = (
+        snapshots[0]
+        if listing.extraction_method == UNREAD and snapshots
+        else next(
+            (
+                s
+                for s in snapshots
+                if str(s.condition) == listing.condition
+                and normalize(s.seller) == listing.seller_key
+            ),
+            None,
+        )
     )
     if snapshot is None:
         return (
@@ -94,7 +136,8 @@ async def confirm_listing_price(
     availability: str | None,
     preferences: Preferences | None,
 ) -> None:
-    html = await adapter.fetcher.get(listing.url, adapter.name, adapter.hosts)
+    with user_waiting():
+        html = await adapter.fetcher.get(listing.url, adapter.name, adapter.hosts)
     rule, snapshot = adapter.preview_rule(html, listing.url, price, availability)
     # A confirmed price is recorded like a check, so it passes the same identity test first:
     # otherwise another model's price would raise alerts and become this listing's reference.
@@ -130,8 +173,13 @@ async def add_link(db, registry, product_id: int, url: str, preferences: Prefere
     search: the page is read once and saved (a conflicting model is kept, as when pasted).
     """
     adapter = registry.for_url(url)
+    url = adapter.normalize_url(url)
     registry.fetcher.retry_now([adapter.name])  # a user action tries a paused store once
-    snapshots = await adapter.fetch_listing(adapter.normalize_url(url))
+    try:
+        with user_waiting():
+            snapshots = await adapter.fetch_listing(url)
+    except BlockedError:
+        snapshots = [unread_snapshot(adapter, url)]  # keep the link; read it later
     with db.session() as session:
         product = session.get(Product, product_id)
         if product is None:
@@ -208,6 +256,10 @@ def add_candidates(
         session.flush()
         record_snapshot(session, product, listing, snapshot, initial=True)
         interval = effective_interval(listing, preferences)
-        listing.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
+        listing.next_check_at = now() + (
+            UNREAD_RETRY
+            if snapshot.method == UNREAD
+            else timedelta(minutes=interval * random.uniform(0.95, 1.05))
+        )
         added.append(listing)
     return added

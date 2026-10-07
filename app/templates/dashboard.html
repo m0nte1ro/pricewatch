@@ -2,7 +2,7 @@
 {% block content %}
 <header class="page-header"><div><div class="eyebrow">OVERVIEW</div><h1>{{ 'Archived products' if archived else 'Your watchlist' }}</h1><p class="muted">A better price is worth watching.</p></div><div class="actions"><form method="post" action="/checks" hx-post="/checks" hx-target="#check-status" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">↻ Run checks now</button></form><a class="button primary" href="/products/new">+ Add product</a></div></header>
 {% set hits = items|selectattr('status', 'in', ['TARGET HIT', 'INSANE DEAL'])|list %}
-<div class="stats"><div><span>Monitored products</span><strong>{{ items|length }}<small>in this view</small></strong></div><div><span>Active listings</span><strong>{{ items|sum(attribute='active_count') }}<small>across retailers</small></strong></div><div><span>Threshold hits</span><strong class="mint">{{ hits|length }}<small>at your price</small></strong></div><div><span>Listings to review</span><strong>{{ items|sum(attribute='errors') }}<small>check errors</small></strong></div></div>
+<div class="stats"><div><span>Monitored products</span><strong>{{ items|length }}<small>in this view</small></strong></div><div><span>Active listings</span><strong>{{ items|sum(attribute='active_count') }}<small>across retailers</small></strong></div><div><span>Threshold hits</span><strong class="mint">{{ hits|length }}<small>at your price</small></strong></div><div><span>Listings to review</span><strong>{{ items|sum(attribute='review') }}<small>failed or unconfirmed</small></strong></div></div>
 <div class="section-heading"><h2>{{ 'Archive' if archived else 'Monitored products' }} <span class="count">{{ items|length }}</span></h2><a class="muted" href="{{ '/' if archived else '/?archived=true' }}">{{ 'View watchlist' if archived else 'View archive' }} →</a></div>
 {% include 'partials/check_status.html' %}
 {% if not scheduler_enabled %}<p class="notice">Scheduled checks are disabled in the environment. Manual checks are available.</p>{% endif %}
@@ -16,7 +16,7 @@
   {% else %}<div class="price">—</div><div class="price-caption">No eligible in-stock price</div>{% endif %}
   <div class="card-metrics"><div><span>Target price</span><b>{{ p.target_price|money }}</b></div><div><span>All-time low</span><b>{{ item.low|money }}</b></div><div><span>Insane deal</span><b>{{ p.insane_deal_price|money }}</b></div></div>
   <div class="card-bottom"><span>Checked {{ item.last_checked|date }}</span><form action="/checks" method="post" hx-post="/checks" hx-target="#check-status" hx-swap="outerHTML"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="product_id" value="{{ p.id }}"><button class="text-button small">Check now</button></form><a href="/products/{{ p.id }}" aria-label="View {{ p.canonical_name }}">↗</a></div>
-  {% if item.errors %}<p class="warning small">{{ item.errors }} listing(s) need attention</p>{% endif %}
+  {% if item.review %}<p class="warning small">{{ item.review }} listing(s) need attention</p>{% endif %}
 </article>
 {% else %}<div class="empty"><div class="empty-symbol">↘</div><h2>Keep an eye on your next purchase.</h2><p>Add a model, a retailer link, or both.<br>Pricewatch will look for matching listings across your selected stores.</p><a class="button primary" href="/products/new">+ Add your first product</a></div>{% endfor %}
 </div>

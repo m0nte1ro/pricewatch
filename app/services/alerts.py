@@ -63,6 +63,7 @@ def evaluate(
         snapshot.condition in product.allowed_conditions
         and snapshot.availability == "in_stock"
         and snapshot.currency == "EUR"
+        and snapshot.method != "heuristic"
     )
     if not eligible or new is None:
         return
@@ -71,6 +72,7 @@ def evaluate(
         and listing.condition in product.allowed_conditions
         and listing.availability == "in_stock"
         and listing.currency == "EUR"
+        and listing.extraction_method != "heuristic"
     )
     if previously_eligible and old is not None and new < old:
         emit(session, product, listing, "price_dropped", old, new)

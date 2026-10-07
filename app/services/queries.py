@@ -17,6 +17,7 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
         and x.availability == "in_stock"
         and x.condition in product.allowed_conditions
         and not x.last_error
+        and x.extraction_method != "heuristic"
     ]
     best = min(eligible, key=lambda x: x.current_price, default=None)
     # Shown when nothing is buyable: the price is still recorded, but clearly not a deal.
@@ -28,6 +29,7 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
             and x.currency == "EUR"
             and x.availability != "in_stock"
             and x.condition in product.allowed_conditions
+            and x.extraction_method != "heuristic"
         ),
         key=lambda x: x.current_price,
         default=None,
@@ -51,7 +53,7 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
         "status": status,
         "active_count": len(active),
         "last_checked": max((x.last_checked_at for x in active if x.last_checked_at), default=None),
-        "errors": sum(bool(x.last_error) for x in active),
+        "review": sum(bool(x.last_error) or x.extraction_method == "heuristic" for x in active),
     }
 
 

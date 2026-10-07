@@ -163,6 +163,26 @@ def test_out_of_stock_deal_price_is_recorded_but_never_alerts(db, candidate):
     ]
 
 
+def test_heuristic_price_never_alerts_or_counts_as_best(db, candidate):
+    candidate.listing.method = "heuristic"
+    candidate.listing.price = Decimal("500")
+    product_id = create_product(db, candidate)
+    assert events(db) == ["new_listing"]
+    with db.session() as session:
+        item = summary(session.get(Product, product_id))
+        assert (item["best"], item["unavailable"], item["review"], item["status"]) == (
+            None,
+            None,
+            1,
+            "WATCHING",
+        )
+    update(db, candidate.listing.model_copy(update={"method": "rule"}))
+    assert events(db) == ["new_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        item = summary(session.get(Product, product_id))
+        assert item["best"].current_price == Decimal("500") and item["review"] == 0
+
+
 def test_effective_interval_precedence(db, candidate):
     create_product(db, candidate)
     prefs = Preferences(polling_minutes=120, retailer_intervals={"worten": 30})

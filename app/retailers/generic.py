@@ -8,7 +8,7 @@ from decimal import Decimal
 from itertools import islice
 from urllib.parse import urlsplit, urlunsplit
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, CData, NavigableString, Tag
 
 from app.retailers.base import RetailerAdapter
 from app.retailers.parsing import ScrapeError, availability, condition, money, text_at
@@ -221,14 +221,36 @@ def _cart_button(button: Tag) -> bool:
     return not button.has_attr("disabled") and bool(CART_HINT.search(label))
 
 
+def _in_noise(tag: Tag) -> bool:
+    # Recommendation blocks show other products' stock labels and cart buttons.
+    return any(NOISE_HINT.search(_hints(t)) for t in (tag, *tag.parents))
+
+
+def _stock_hinted(tag: Tag) -> bool:
+    return any(STOCK_HINT.search(_hints(t)) for t in (tag, *islice(tag.parents, 3)))
+
+
+def _says_sold_out(soup: BeautifulSoup) -> bool:
+    # Only the strings get_text() shows: script, style and comment text never reach shoppers.
+    shown = (s for s in soup.find_all(string=True) if type(s) in (NavigableString, CData))
+    text = " ".join(t for s in shown if (t := s.strip()) and not _in_noise(s.parent))
+    return any(x in text.casefold() for x in OUT_OF_STOCK_TEXT)
+
+
+def _buyable(soup: BeautifulSoup) -> Tag | None:
+    buttons = soup.select("button, input[type=submit]")
+    return next((b for b in buttons if _cart_button(b) and not _in_noise(b)), None)
+
+
 def heuristic_availability(soup: BeautifulSoup) -> str:
     for tag in soup.find_all(lambda t: bool(STOCK_HINT.search(_hints(t)))):
-        if (state := availability(tag.get_text(" ", strip=True))) != "unknown":
+        state = availability(tag.get_text(" ", strip=True))
+        if state != "unknown" and not _in_noise(tag):
             return state
-    if any(_cart_button(b) for b in soup.select("button, input[type=submit]")):
-        return "in_stock"
-    text = soup.get_text(" ", strip=True).casefold()
-    return "out_of_stock" if any(x in text for x in OUT_OF_STOCK_TEXT) else "unknown"
+    # Some stores keep the cart button enabled on sold-out pages.
+    if _says_sold_out(soup):
+        return "out_of_stock"
+    return "in_stock" if _buyable(soup) else "unknown"
 
 
 def _meta(soup: BeautifulSoup, name: str) -> str:
@@ -281,7 +303,10 @@ def _rule_availability(soup: BeautifulSoup, rule: PriceRule) -> str:
     if rule.availability_mode == "presence":
         # Sold-out pages often keep the slot but disable it or relabel it "Esgotado"/"Notify me".
         return "in_stock" if element is not None and _cart_button(element) else "out_of_stock"
-    return availability(element.get_text(" ", strip=True)) if element is not None else "unknown"
+    if element is None:
+        # Sold-out pages may replace the stock label; a missing label alone proves nothing.
+        return "out_of_stock" if _says_sold_out(soup) else "unknown"
+    return availability(element.get_text(" ", strip=True))
 
 
 def _rule_price(text: str) -> Decimal | None:
@@ -308,29 +333,37 @@ def read_rule(soup: BeautifulSoup, rule: PriceRule) -> Reading | None:
     )
 
 
-def _shortest(soup: BeautifulSoup, limit: int, accept: Callable[[str], bool]) -> Tag | None:
+def _shortest(soup: BeautifulSoup, limit: int, accept: Callable[[Tag, str], bool]) -> Tag | None:
     found = None
     for element in soup.find_all(lambda t: t.name not in ("script", "style")):
         text = element.get_text(" ", strip=True)
         # A descendant comes later in document order, so on equal text the innermost wins.
-        if len(text) <= limit and accept(text) and (found is None or len(text) <= found[0]):
+        if (
+            len(text) <= limit
+            and (found is None or len(text) <= found[0])
+            and accept(element, text)
+        ):
             found = (len(text), element)
     return found[1] if found else None
 
 
 def _stock_rule(soup: BeautifulSoup, state: str | None) -> tuple[str | None, str]:
     if state in ("in_stock", "out_of_stock"):
-        if element := _shortest(soup, 60, lambda text: availability(text) == state):
+
+        def says(element: Tag, text: str) -> bool:
+            return availability(text) == state and not _in_noise(element)
+
+        # A stock label beats the same words elsewhere on the page, such as a legend.
+        labelled = _shortest(soup, 60, lambda e, text: says(e, text) and _stock_hinted(e))
+        if element := labelled or _shortest(soup, 60, says):
             return css_path(element, soup), "text"
-    if state == "in_stock":
-        for button in soup.select("button, input[type=submit]"):
-            if _cart_button(button):
-                return css_path(button, soup), "presence"
+    if state == "in_stock" and (button := _buyable(soup)):
+        return css_path(button, soup), "presence"
     return None, "text"
 
 
 def teach(soup: BeautifulSoup, price: Decimal, availability: str | None) -> PriceRule:
-    element = _shortest(soup, 40, lambda text: _rule_price(text) == price)
+    element = _shortest(soup, 40, lambda _, text: _rule_price(text) == price)
     if element is None:
         raise ScrapeError(f"Could not find a price of {price} on the page")
     selector, mode = _stock_rule(soup, availability)

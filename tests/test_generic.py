@@ -551,6 +551,101 @@ def test_rule_whose_element_gained_instalment_text_falls_back(db, caplog):
     assert [r.getMessage() for r in caplog.records] == ["store_rule_failed"]
 
 
+CAROUSEL_PAGE = """<html><head><title>TV TCL 85C7K | Store One</title></head><body>
+<main class="product"><h1>TV TCL 85C7K</h1><span class="price-current">1.299,99 €</span>
+<div class="availability">Em stock</div><button class="add">Adicionar ao carrinho</button></main>
+<section class="related-products">
+<div class="card"><span class="name">Cabo HDMI</span><span class="price">9,99 €</span><span class="badge">Em stock</span></div>
+<div class="card"><span class="name">Suporte</span><span class="price">29,99 €</span><span class="badge">Em stock</span></div>
+</section></body></html>"""
+
+
+def test_taught_stock_rule_reads_the_product_and_not_a_recommendation_badge():
+    s = soup(CAROUSEL_PAGE)
+    rule = teach(s, Decimal("1299.99"), "in_stock")
+    assert s.select_one(rule.availability_selector) is s.select_one("div.availability")
+    sold_out = CAROUSEL_PAGE.replace(
+        '<div class="availability">Em stock</div><button class="add">Adicionar ao carrinho</button>',
+        '<div class="availability">Esgotado</div><button class="add" disabled>Esgotado</button>',
+    )
+    reading = read_rule(soup(sold_out), rule)
+    assert (reading.price, reading.availability) == (Decimal("1299.99"), "out_of_stock")
+
+
+def test_teach_takes_no_stock_evidence_from_a_recommendation_block():
+    s = soup(
+        '<section class="related-products"><div class="card"><span class="badge">Em stock</span>'
+        '<button class="add">Comprar</button></div></section><main class="product"><h1>P</h1>'
+        '<span class="amount">999 €</span><button class="add">Adicionar ao carrinho</button></main>'
+    )
+    rule = teach(s, Decimal("999"), "in_stock")
+    assert rule.availability_mode == "presence"
+    assert s.select_one(rule.availability_selector) is s.select_one("main button")
+    only_carousel = soup(
+        '<main><h1>P</h1><span class="amount">999 €</span></main><section class="related-products">'
+        '<span class="badge">Esgotado</span><button>Comprar</button></section>'
+    )
+    assert teach(only_carousel, Decimal("999"), "in_stock").availability_selector is None
+    assert teach(only_carousel, Decimal("999"), "out_of_stock").availability_selector is None
+
+
+def test_teach_prefers_a_stock_label_then_any_text_outside_recommendations():
+    page = (
+        '<main><h1>P</h1><span class="amount">999 €</span><div class="stock-info">'
+        "<span>Disponível em stock</span></div></main><footer><span>Em stock</span></footer>"
+    )
+    s = soup(page)
+    rule = teach(s, Decimal("999"), "in_stock")
+    assert s.select_one(rule.availability_selector) is s.select_one("div.stock-info span")
+    s = soup(page.replace('class="stock-info"', 'class="info"'))
+    rule = teach(s, Decimal("999"), "in_stock")
+    assert s.select_one(rule.availability_selector) is s.select_one("footer span")
+
+
+def test_sold_out_text_beats_an_enabled_cart_button():
+    page = (
+        '<h1>P</h1><span class="price">999 €</span><p class="msg">Esgotado</p>'
+        '<button class="add">Comprar</button>'
+    )
+    assert heuristic_availability(soup(page)) == "out_of_stock"
+
+
+def test_recommendation_blocks_are_not_stock_evidence():
+    sold_out_elsewhere = (
+        '<main><h1>P</h1><button class="add">Comprar</button></main>'
+        '<section class="related-products"><p>Esgotado</p></section>'
+    )
+    assert heuristic_availability(soup(sold_out_elsewhere)) == "in_stock"
+    buyable_elsewhere = (
+        '<main><h1>P</h1><p>Descrição</p></main><section class="related-products">'
+        '<span class="stock">Em stock</span><button>Comprar</button></section>'
+    )
+    assert heuristic_availability(soup(buyable_elsewhere)) == "unknown"
+
+
+def test_sold_out_text_in_scripts_and_comments_is_not_shown_to_shoppers():
+    page = '<script>var t = {"oos": "Esgotado"}</script><!-- esgotado --><button>Comprar</button>'
+    assert heuristic_availability(soup(page)) == "in_stock"
+
+
+STOCK_DIV = '<div class="stock">Em stock</div>'
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        ('<p class="msg">Produto esgotado</p>', "out_of_stock"),
+        ("", "unknown"),
+        ('<button class="add">Comprar</button>', "unknown"),
+        ('<section class="related-products"><p>Esgotado</p></section>', "unknown"),
+    ],
+)
+def test_text_rule_whose_stock_element_is_gone_reads_only_a_sold_out_notice(replacement, expected):
+    rule = teach(soup(OLD_PRICE_FIRST_PAGE), Decimal("1299.99"), "in_stock")
+    page = OLD_PRICE_FIRST_PAGE.replace(STOCK_DIV, replacement)
+    assert read_rule(soup(page), rule).availability == expected
+
+
 CART_RULE = PriceRule(
     price_selector="span.amount", availability_selector="button.add", availability_mode="presence"
 )

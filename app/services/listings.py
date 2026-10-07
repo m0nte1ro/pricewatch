@@ -1,10 +1,12 @@
 import logging
 import random
 from datetime import timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
 
 from app.models import Listing, PriceHistory, Product
+from app.retailers.generic import GenericAdapter
 from app.schemas.domain import Candidate, Preferences, Snapshot, now
 from app.services.alerts import evaluate
 from app.services.matching import normalize
@@ -46,6 +48,24 @@ def effective_interval(listing: Listing, preferences: Preferences | None) -> int
     if preferences is None:
         return 60
     return preferences.retailer_intervals.get(listing.retailer, preferences.polling_minutes)
+
+
+async def confirm_listing_price(
+    db,
+    adapter: GenericAdapter,
+    listing: Listing,
+    price: Decimal,
+    availability: str | None,
+    preferences: Preferences | None,
+) -> None:
+    html = await adapter.fetcher.get(listing.url, adapter.name, adapter.hosts)
+    snapshot = adapter.learn(html, listing.url, price, availability)
+    with db.session() as session:
+        row = session.get(Listing, listing.id)
+        record_snapshot(session, row.product, row, snapshot)
+        interval = effective_interval(row, preferences)
+        row.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
+    log.info("store_rule_taught", extra={"retailer": adapter.name, "listing_id": listing.id})
 
 
 def add_candidates(

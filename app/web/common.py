@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
+from app.retailers.parsing import money
 from app.schemas.domain import Condition
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
@@ -50,6 +51,16 @@ def amount(form, name: str) -> str | None:
         return str(result.quantize(Decimal(".01")))
     except (InvalidOperation, ValueError):
         raise HTTPException(422, "Prices must be positive finite amounts") from None
+
+
+def confirmed_price(form) -> tuple[Decimal, str | None]:
+    price = money(form.get("price"))
+    if price is None:
+        raise HTTPException(422, "Enter the price as shown on the page, e.g. 1299,99")
+    availability = str(form.get("availability", ""))
+    if availability not in ("in_stock", "out_of_stock", "unknown"):
+        raise HTTPException(422, "Invalid availability")
+    return price, None if availability == "unknown" else availability
 
 
 def validate_thresholds(target, insane):

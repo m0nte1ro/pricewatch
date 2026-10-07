@@ -1,0 +1,4 @@
+{% extends 'base.html' %}
+{% block title %}Confirm price · {{ product.canonical_name }} · Pricewatch{% endblock %}
+{% block content %}<header class="page-header"><div><a href="/products/{{ product.id }}" class="eyebrow">← PRODUCT</a><h1>Confirm price · {{ product.canonical_name }} · {{ listing.retailer }}</h1><p class="muted">{{ listing.title }}</p></div></header>
+<section class="panel">{% if error %}<p class="warning">{{ error }}</p>{% else %}{% with action = '/listings/' ~ listing.id ~ '/confirm-price' %}{% include 'partials/price_confirm.html' %}{% endwith %}{% endif %}</section>{% endblock %}

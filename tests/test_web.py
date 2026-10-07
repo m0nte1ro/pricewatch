@@ -439,6 +439,38 @@ def test_confirm_price_from_preview_teaches_store_rule(site):
     )
 
 
+def test_confirm_price_from_product_page(site):
+    client, runtime, _, _ = site
+    url = "https://www.storeone.pt/produto/tcl-85c7k"
+    GENERIC_PAGES[url] = OLD_PRICE_FIRST_PAGE
+    path, _ = discover(client, name="TCL 85C7K", urls=[url], retailers=[])
+    product_path = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    with runtime.db.session() as session:
+        listing_id = session.scalar(select(Listing)).id
+    assert "Confirm price" in client.get(product_path).text
+    page = client.get(f"/listings/{listing_id}/confirm-price").text
+    assert "1.499,00" in page and "1.299,99" in page
+    response = client.post(
+        f"/listings/{listing_id}/confirm-price",
+        data=form_data(client, price="1299.99", availability="in_stock"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        assert (listing.current_price, listing.extraction_method, listing.availability) == (
+            Decimal("1299.99"),
+            "rule",
+            "in_stock",
+        )
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 2
+        assert listing.next_check_at > now()
+    assert "price unconfirmed" not in client.get(product_path).text
+    assert client.get("/listings/999/confirm-price").status_code == 404
+
+
 def test_settings_lists_and_forgets_store_rules(site):
     client, runtime, _, _ = site
     runtime.rules.save("storeone.pt", PriceRule(price_selector="span.price-current"))

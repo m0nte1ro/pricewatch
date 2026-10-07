@@ -2,10 +2,21 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import joinedload
 
 from app.models import Listing, Product
+from app.retailers.parsing import ScrapeError
 from app.schemas.domain import now
-from app.web.common import amount, get_product, protected, render, selection, validate_thresholds
+from app.services.listings import confirm_listing_price
+from app.web.common import (
+    amount,
+    confirmed_price,
+    get_product,
+    protected,
+    render,
+    selection,
+    validate_thresholds,
+)
 
 router = APIRouter()
 
@@ -112,6 +123,44 @@ async def listing_interval(request: Request, listing_id: int):
             listing.next_check_at = min(listing.next_check_at, now() + timedelta(minutes=minutes))
         product_id = listing.product_id
     return RedirectResponse(f"/products/{product_id}", 303)
+
+
+def generic_listing(runtime, listing_id: int) -> Listing:
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id, options=[joinedload(Listing.product)])
+    if listing is None:
+        raise HTTPException(404, "Listing not found")
+    if listing.retailer in runtime.registry.adapters:
+        raise HTTPException(404, "Only generic store listings can be taught")
+    return listing
+
+
+@router.get("/listings/{listing_id}/confirm-price")
+async def listing_confirm_form(request: Request, listing_id: int):
+    runtime = request.app.state.runtime
+    listing = generic_listing(runtime, listing_id)
+    context = {"listing": listing, "product": listing.product}
+    try:
+        snapshots = await runtime.registry[listing.retailer].fetch_listing(listing.url)
+    except ScrapeError as exc:
+        return render(request, "listing_confirm.html", **context, error=str(exc))
+    snapshot = snapshots[0].model_dump(mode="json")
+    return render(request, "listing_confirm.html", **context, snapshot=snapshot)
+
+
+@router.post("/listings/{listing_id}/confirm-price", dependencies=[Depends(protected)])
+async def confirm_listing(request: Request, listing_id: int):
+    runtime = request.app.state.runtime
+    listing = generic_listing(runtime, listing_id)
+    price, availability = confirmed_price(await request.form())
+    preferences = runtime.settings.get()
+    try:
+        adapter = runtime.registry[listing.retailer]
+        await confirm_listing_price(runtime.db, adapter, listing, price, availability, preferences)
+    except (ScrapeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    runtime.spawn(runtime.notifications.deliver())
+    return RedirectResponse(f"/products/{listing.product_id}", 303)
 
 
 @router.post("/checks", dependencies=[Depends(protected)])

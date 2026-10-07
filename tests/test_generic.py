@@ -307,3 +307,26 @@ def test_structured_data_is_read_without_a_title_element():
         "TCL 85C7K",
         Decimal("1199.00"),
     )
+
+
+def test_generic_adapters_never_hold_a_non_public_host():
+    registry = Registry(Fetcher(None, None))
+    for url in ("https://www.nas/p", "https://www.192.168.1.10/p", "https://www.0x7f.1/p"):
+        with pytest.raises(ScrapeError, match="Only public https:// store links"):
+            registry.for_url(url)
+    with pytest.raises(ScrapeError, match="Only public https:// store links"):
+        registry["nas"]
+    with pytest.raises(ScrapeError, match="Only public https:// store links"):
+        GenericAdapter(Fetcher(None, None), "nas").normalize_url("https://nas/admin")
+    assert registry.generic == {}
+
+
+def test_structured_data_without_a_price_falls_through_to_the_page():
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt")
+    snapshot = adapter.parse(
+        '<h1>TCL 85C7K</h1><script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"availability":"https://schema.org/InStock"}}</script>'
+        '<span class="price-current">1.299,99 €</span>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.method, snapshot.price) == ("heuristic", Decimal("1299.99"))

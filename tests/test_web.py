@@ -334,6 +334,8 @@ def test_http_link_is_rejected_at_the_form(site):
         "https://localhost/produto/x",
         "https://nas/produto/x",
         "https://printer.local/p",
+        "https://www.nas/produto/x",
+        "https://www.192.168.1.10/produto/x",
     ],
 )
 def test_non_public_links_become_notes_and_are_never_requested(site, url):
@@ -383,3 +385,11 @@ def test_generic_page_without_price_is_kept_and_flagged(site):
             "unknown",
             "heuristic",
         )
+
+
+def test_redirect_to_a_non_public_host_is_never_followed(site):
+    client, _, _, requests = site
+    GENERIC_PAGES["https://www.storeone.pt/p/r"] = (302, "https://nas/admin")
+    _, page = discover(client, name="TCL 85C7K", urls=["https://www.storeone.pt/p/r"], retailers=[])
+    assert "Manual URL (www.storeone.pt): Retailer request failed" in page.text
+    assert requests == ["https://www.storeone.pt/p/r"]

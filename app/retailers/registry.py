@@ -4,7 +4,7 @@ from app.retailers.amazon_es import AmazonESAdapter
 from app.retailers.base import RetailerAdapter
 from app.retailers.darty import DartyAdapter
 from app.retailers.fnac import FnacAdapter
-from app.retailers.generic import GenericAdapter, public_host, store_key
+from app.retailers.generic import PUBLIC_ONLY, GenericAdapter, public_host, store_key
 from app.retailers.parsing import ScrapeError
 from app.retailers.radiopopular import RadioPopularAdapter
 from app.retailers.worten import WortenAdapter
@@ -33,6 +33,8 @@ class Registry:
     def __getitem__(self, name: str) -> RetailerAdapter:
         if name in self.adapters:
             return self.adapters[name]
+        if not public_host(name):
+            raise ScrapeError(PUBLIC_ONLY)
         if name not in self.generic:
             self.generic[name] = GenericAdapter(self.fetcher, name, self.rules)
         return self.generic[name]
@@ -50,6 +52,8 @@ class Registry:
         for adapter in self.adapters.values():
             if host in adapter.hosts:
                 return adapter
-        if not public_host(host):
-            raise ScrapeError("Only public https:// store links can be monitored")
+        # Both names: the adapter also accepts the bare store key, so "www.nas" must not
+        # admit "nas".
+        if not (public_host(host) and public_host(store_key(host))):
+            raise ScrapeError(PUBLIC_ONLY)
         return self[store_key(host)]

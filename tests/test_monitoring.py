@@ -175,3 +175,18 @@ def test_effective_interval_precedence(db, candidate):
         prefs.retailer_intervals = {}
         assert effective_interval(listing, prefs) == 120
         assert effective_interval(listing, None) == 60
+
+
+async def test_stored_listing_on_a_non_public_host_is_never_requested(site, candidate):
+    _, runtime, _, requests = site
+    candidate.listing.retailer, candidate.listing.url = "nas", "https://nas/admin"
+    create_product(runtime.db, candidate)
+    with runtime.db.session() as session:
+        session.scalar(select(Listing)).next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        assert (
+            session.scalar(select(Listing)).last_error
+            == "Only public https:// store links can be monitored"
+        )
+    assert requests == []

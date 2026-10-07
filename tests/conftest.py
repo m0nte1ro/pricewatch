@@ -20,9 +20,10 @@ URLS = {
     "radiopopular": "https://www.radiopopular.pt/produto/tv-tcl-85c7k",
     "amazon_es": "https://www.amazon.es/dp/B012345678",
 }
-# Pages of stores without a dedicated adapter, keyed by full URL; an int under a bare host
-# answers every request to that host with that status.
-GENERIC_PAGES: dict[str, str | int] = {}
+# Pages of stores without a dedicated adapter, keyed by full URL; a (status, location) tuple
+# answers that URL with a redirect, and an int under a bare host answers every request to that
+# host with that status.
+GENERIC_PAGES: dict[str, str | int | tuple[int, str]] = {}
 
 
 @pytest.fixture
@@ -70,8 +71,11 @@ def site(db, tmp_path):
         host = request.url.host
         if isinstance(status := GENERIC_PAGES.get(host), int):
             return httpx.Response(status)
-        if isinstance(page := GENERIC_PAGES.get(str(request.url)), str):
+        page = GENERIC_PAGES.get(str(request.url))
+        if isinstance(page, str):
             return httpx.Response(200, text=page)
+        if isinstance(page, tuple):
+            return httpx.Response(page[0], headers={"location": page[1]})
         if not any(host in url for url in URLS.values()):
             return httpx.Response(404)
         retailer = next(name for name, url in URLS.items() if host in url)

@@ -37,6 +37,7 @@ LOCAL_SUFFIXES = (
     ".example",
     ".invalid",
 )
+PUBLIC_ONLY = "Only public https:// store links can be monitored"
 OUT_OF_STOCK_TEXT = ("esgotado", "indisponível", "sem stock", "fora de stock", "out of stock")
 CURRENCIES = (("EUR", "€"), ("GBP", "£"), ("USD", "$"))
 CURRENCY_MARK = re.compile(r"[€$£]|EUR|GBP|USD", re.I)
@@ -276,10 +277,15 @@ class GenericAdapter(RetailerAdapter):
         self.rules = rules
 
     def normalize_url(self, url: str) -> str:
+        host = urlsplit(url.strip()).hostname
+        # Every fetch, stored listing and offer URL passes through here, so a non-public host
+        # is refused even when it reached this adapter some other way than Registry.for_url.
+        if not host or not public_host(host):
+            raise ScrapeError(PUBLIC_ONLY)
         # Unknown stores may serve a product on only one of www and the bare host, so keep the
         # one that was pasted instead of picking hosts[0] like the dedicated adapters.
         normalized = urlsplit(super().normalize_url(url))
-        return urlunsplit(normalized._replace(netloc=urlsplit(url.strip()).hostname))
+        return urlunsplit(normalized._replace(netloc=host))
 
     async def search_product(self, identity: Identity) -> list[str]:
         return []
@@ -287,8 +293,12 @@ class GenericAdapter(RetailerAdapter):
     def parse(self, html: str, url: str) -> list[Snapshot]:
         soup = BeautifulSoup(html, "html.parser")
         try:
-            snapshot = super().parse(html, url)[0]
+            snapshots = super().parse(html, url)
         except ScrapeError:
+            snapshots = []
+        # Structured data without a price is a miss: the page itself may still show one.
+        snapshot = next((s for s in snapshots if s.price is not None), None)
+        if snapshot is None:
             snapshot = self.snapshot(read_meta(soup) or read_heuristic(soup), soup, url)
         # A heuristic reading already holds the page's candidates.
         if snapshot.method != "heuristic":

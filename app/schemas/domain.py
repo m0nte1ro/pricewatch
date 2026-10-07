@@ -36,6 +36,12 @@ class PriceCandidate(BaseModel):
     text: str
 
 
+def lower_price(price: Decimal | None, promo_price: Decimal | None) -> Decimal | None:
+    if promo_price is not None and (price is None or promo_price < price):
+        return promo_price
+    return price
+
+
 class Snapshot(BaseModel):
     retailer: str
     url: str
@@ -51,8 +57,16 @@ class Snapshot(BaseModel):
     observed_at: datetime = Field(default_factory=now)
     method: str = "structured"
     alternatives: list[PriceCandidate] = Field(default_factory=list)
+    # A lower price the page offers with a public promo code (e.g. "-20% c/código TV20").
+    promo_price: Decimal | None = None
+    promo_code: str | None = None
 
-    @field_validator("price", "original_price")
+    @property
+    def deal_price(self) -> Decimal | None:
+        """What the owner would pay: the promo-code price when it is lower."""
+        return lower_price(self.price, self.promo_price)
+
+    @field_validator("price", "original_price", "promo_price")
     @classmethod
     def valid_money(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and (not value.is_finite() or value <= 0):

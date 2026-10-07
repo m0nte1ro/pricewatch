@@ -1,4 +1,5 @@
 import json
+import re
 from decimal import Decimal
 
 import pytest
@@ -155,18 +156,6 @@ def test_darty_first_party_offer_without_markers_is_new(registry):
     assert listing.retailer_product_id == "T00250456"
 
 
-def test_radio_live_microdata(registry):
-    listing = registry.adapters["radiopopular"].parse(
-        (FIXTURES / "radio_live.html").read_text(),
-        "https://www.radiopopular.pt/produto/tv-tcl-85c7l",
-    )[0]
-    assert listing.price == Decimal("2699.99")
-    assert listing.availability == "out_of_stock"
-    assert listing.identity.model == "85C7L"
-    assert listing.condition == "new"
-    assert listing.retailer_product_id == "F126186"
-
-
 def test_first_party_default_never_hides_outlet_markers(registry):
     html = (
         '<h1>TV TCL 55P8L Outlet Grade B</h1><span itemprop="price" content="399.99"></span>'
@@ -309,3 +298,54 @@ async def test_search_falls_back_from_name_to_model_to_barcode():
     links = await DartyAdapter(fetcher).search_product(identity)
     assert fetcher.queries == ["85C7K", "TCL 85C7K", "5901292525712"]
     assert len(links) == 1
+
+
+RADIO_URL = "https://www.radiopopular.pt/produto/tv-tcl-85c7l"
+
+
+def radio_page(**replacements):
+    html = (FIXTURES / "radio_85c7l_promo_live.html").read_text()
+    for old, new in replacements.items():
+        assert old in html, old
+        html = html.replace(old, new)
+    return html
+
+
+def test_radio_popular_reads_the_product_header_not_similar_products(registry):
+    # Live page: the "similar products" carousel carries its own itemprop price (2.699,99),
+    # stock and sku before the product's; the header holds the product's real figures.
+    listing = registry.adapters["radiopopular"].parse(radio_page(), RADIO_URL)[0]
+    assert (listing.title, listing.identity.model) == ("TV TCL 85C7L", "85C7L")
+    assert listing.price == Decimal("2499.99")
+    assert (listing.promo_price, listing.promo_code) == (Decimal("1999.99"), "TV20")
+    assert listing.deal_price == Decimal("1999.99")
+    assert (listing.availability, listing.condition) == ("in_stock", "new")
+    assert listing.retailer_product_id == "134791"
+
+
+def test_radio_popular_without_a_promo_code(registry):
+    html = re.sub(r'<div class="price-promocode-bar".*?</span></div>', "", radio_page(), flags=re.S)
+    listing = registry.adapters["radiopopular"].parse(html, RADIO_URL)[0]
+    assert (listing.promo_price, listing.promo_code, listing.deal_price) == (
+        None,
+        None,
+        Decimal("2499.99"),
+    )
+
+
+@pytest.mark.parametrize(
+    "button,expected",
+    [
+        ("Esgotado", "out_of_stock"),  # a sold-out label where the cart button was
+        ("", "unknown"),  # no cart button and no stock text: never assume in stock
+    ],
+)
+def test_radio_popular_stock_comes_from_the_product_header(registry, button, expected):
+    html = re.sub(
+        r'<div class="rp-button-blue buy[^"]*"[^>]*>.*?Adicionar ao carrinho\s*</div>',
+        f'<div class="unavailable">{button}</div>',
+        radio_page(),
+        flags=re.S,
+    )
+    listing = registry.adapters["radiopopular"].parse(html, RADIO_URL)[0]
+    assert listing.availability == expected

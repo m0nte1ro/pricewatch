@@ -65,8 +65,7 @@ def evaluate(
         elif snapshot.availability == "out_of_stock":
             emit(session, product, listing, "became_unavailable", old, new, unconfirmed=unconfirmed)
     eligible = (
-        snapshot.condition in product.allowed_conditions
-        and snapshot.availability == "in_stock"
+        snapshot.availability == "in_stock"
         and snapshot.currency == "EUR"
         and snapshot.method != "heuristic"
     )
@@ -74,7 +73,6 @@ def evaluate(
         return
     previously_eligible = (
         not initial
-        and listing.condition in product.allowed_conditions
         and listing.availability == "in_stock"
         and listing.currency == "EUR"
         and listing.extraction_method != "heuristic"

@@ -14,7 +14,6 @@ from app.web.common import (
     get_product,
     protected,
     render,
-    selection,
     validate_thresholds,
 )
 
@@ -38,7 +37,7 @@ async def dashboard(request: Request, archived: bool = False):
 async def new_product(request: Request, product_id: int | None = None):
     runtime = request.app.state.runtime
     product = get_product(runtime, product_id)["product"] if product_id else None
-    return render(request, "add.html", preferences=runtime.settings.get(), product=product)
+    return render(request, "add.html", product=product)
 
 
 @router.get("/products/{product_id}")
@@ -65,9 +64,6 @@ async def edit_product(request: Request, product_id: int):
     form = await request.form()
     target, insane = amount(form, "target_price"), amount(form, "insane_deal_price")
     validate_thresholds(target, insane)
-    from app.schemas.domain import Condition
-
-    conditions = selection(form, "conditions", list(Condition))
     name = str(form.get("canonical_name", "")).strip()
     if not name or len(name) > 250:
         raise HTTPException(422, "A product name of 1–250 characters is required")
@@ -75,7 +71,6 @@ async def edit_product(request: Request, product_id: int):
         product = session.get(Product, product_id)
         product.canonical_name = name
         product.target_price, product.insane_deal_price = target, insane
-        product.allowed_conditions = conditions
         product.enabled = form.get("enabled") == "on"
     return RedirectResponse(f"/products/{product_id}", 303)
 

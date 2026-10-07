@@ -19,7 +19,6 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
         if x.current_price is not None
         and x.currency == "EUR"
         and x.availability == "in_stock"
-        and x.condition in product.allowed_conditions
         and not x.last_error
         and x.extraction_method != "heuristic"
     ]
@@ -32,7 +31,6 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
             if x.current_price is not None
             and x.currency == "EUR"
             and x.availability != "in_stock"
-            and x.condition in product.allowed_conditions
             and x.extraction_method != "heuristic"
         ),
         key=lambda x: x.current_price,

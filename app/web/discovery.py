@@ -5,7 +5,6 @@ from fastapi.responses import RedirectResponse
 
 from app.models import DiscoveryDraft
 from app.retailers.parsing import ScrapeError
-from app.schemas.domain import Condition
 from app.web.common import (
     amount,
     confirmed_price,
@@ -60,7 +59,6 @@ async def start_discovery(request: Request):
         "category": category,
         "target_price": target,
         "insane_deal_price": insane,
-        "conditions": selection(form, "conditions", list(Condition)),
         "retailers": retailers,
     }
     draft_id = runtime.discovery.create(payload, product_id)

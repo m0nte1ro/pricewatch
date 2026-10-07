@@ -84,7 +84,6 @@ class Preferences(BaseModel):
     enabled_retailers: list[str] = Field(
         default_factory=lambda: ["worten", "fnac", "darty", "radiopopular", "amazon_es"]
     )
-    allowed_conditions: list[Condition] = Field(default_factory=lambda: [Condition.NEW])
     user_agent: str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     request_timeout: int = Field(20, ge=5, le=90)
     proxy: str = ""

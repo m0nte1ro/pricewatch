@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.models import Alert, RetailerState
-from app.schemas.domain import Condition, Preferences
+from app.schemas.domain import Preferences
 from app.web.common import protected, render, selection
 
 router = APIRouter()
@@ -42,7 +42,6 @@ async def save_settings(request: Request):
             polling_minutes=form.get("polling_minutes", 60),
             retailer_intervals=intervals,
             enabled_retailers=selection(form, "retailers", runtime.registry.adapters),
-            allowed_conditions=selection(form, "conditions", list(Condition)),
             user_agent=str(form.get("user_agent", ""))[:500],
             request_timeout=form.get("request_timeout", 20),
             proxy=""

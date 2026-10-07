@@ -66,11 +66,16 @@ def test_threshold_crossings_are_not_repeated(db, candidate):
     assert events(db).count("target_hit") == 2
 
 
-def test_disallowed_grade_c_never_triggers_deal(db, candidate):
+def test_any_saved_listing_alerts_whatever_its_condition(db, candidate):
+    # The owner picks every link; the link they saved is the filter, not a condition list.
     candidate.listing.condition = "outlet_grade_c"
     candidate.listing.price = Decimal("500")
-    create_product(db, candidate, conditions=["new", "outlet_grade_a"])
-    assert events(db) == ["outlet_listing"]
+    product_id = create_product(db, candidate)
+    assert events(db) == ["outlet_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        item = summary(session.get(Product, product_id))
+        assert item["best"].current_price == Decimal("500")
+        assert item["status"] == "INSANE DEAL"
 
 
 def test_allowed_grade_a_and_initial_threshold(db, candidate):

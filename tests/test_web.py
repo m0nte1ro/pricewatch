@@ -24,7 +24,6 @@ def payload(name="TCL 85C7K", urls=None):
         "category": "tv",
         "target_price": "900",
         "insane_deal_price": "800",
-        "conditions": ["new"],
         "retailers": list(URLS),
     }
 
@@ -37,7 +36,6 @@ def discover(client, **kwargs):
     inputs = {
         "name": "TCL 85C7K",
         "retailers": list(URLS),
-        "conditions": ["new"],
         "target_price": "900",
         "insane_deal_price": "800",
         **kwargs,
@@ -106,7 +104,6 @@ def test_edit_disable_archive_restore_preserves_history(site):
             canonical_name="Living room TV",
             target_price="850",
             insane_deal_price="700",
-            conditions=["new"],
             enabled="on",
         ),
     )
@@ -162,7 +159,6 @@ def test_settings_secret_not_rendered_and_retained(site):
         ntfy_url="https://ntfy.sh",
         ntfy_topic="example",
         ntfy_token="secret-test-value",
-        conditions=["new"],
         retailers=["worten"],
     )
     response = client.post("/settings", data=data)
@@ -518,15 +514,16 @@ def test_forgetting_a_store_rule_requires_the_form_token(site):
 
 def test_add_form_requires_links_or_stores(site):
     client, _, _, _ = site
-    response = client.post(
-        "/discoveries", data=form_data(client, name="TCL 85C7K", conditions=["new"])
-    )
+    response = client.post("/discoveries", data=form_data(client, name="TCL 85C7K"))
     assert (
         response.status_code == 422
         and "Add at least one link, or pick stores to search" in response.text
     )
     page = client.get("/products/new").text
     assert "Also search known stores" in page and 'value="worten" checked' not in page
+    # Every saved link alerts; there is no condition filter to fill in.
+    assert "Alert conditions" not in page and 'name="conditions"' not in page
+    assert 'name="conditions"' not in client.get("/settings").text
 
 
 def test_manual_conflicting_link_is_saved_with_warning(site):

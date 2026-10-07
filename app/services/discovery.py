@@ -236,7 +236,6 @@ class DiscoveryService:
                     insane_deal_price=Decimal(draft.payload["insane_deal_price"])
                     if draft.payload["insane_deal_price"]
                     else None,
-                    allowed_conditions=draft.payload["conditions"],
                     retailers=draft.payload["retailers"],
                 )
                 session.add(product)

@@ -7,7 +7,6 @@ from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from app.retailers.parsing import money
-from app.schemas.domain import Condition
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 TEMPLATES.env.filters["money"] = lambda value: f"€{value:,.2f}" if value is not None else "—"
@@ -23,7 +22,6 @@ def render(request: Request, template: str, **context):
         context={
             "csrf": request.state.csrf,
             "retailers": request.app.state.runtime.registry,
-            "conditions": [str(c) for c in Condition],
             **context,
         },
     )

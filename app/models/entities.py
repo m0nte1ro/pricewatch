@@ -61,10 +61,14 @@ class Listing(Base):
     seller: Mapped[str | None] = mapped_column(String(200))
     seller_key: Mapped[str] = mapped_column(String(200), default="")
     sources: Mapped[list] = mapped_column(JSON, default=list)
+    extraction_method: Mapped[str] = mapped_column(
+        String(20), default="structured", server_default="structured"
+    )
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
     next_check_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    check_interval_minutes: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     product: Mapped[Product] = relationship(back_populates="listings")
@@ -105,6 +109,17 @@ class RetailerState(Base):
     last_failure_at: Mapped[datetime | None] = mapped_column(DateTime)
     blocked_until: Mapped[datetime | None] = mapped_column(DateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class StoreRule(Base):
+    __tablename__ = "store_rules"
+    host: Mapped[str] = mapped_column(String(100), primary_key=True)
+    price_selector: Mapped[str] = mapped_column(Text)
+    availability_selector: Mapped[str | None] = mapped_column(Text)
+    availability_mode: Mapped[str] = mapped_column(
+        String(10), default="text", server_default="text"
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 
 class Setting(Base):

@@ -6,6 +6,7 @@ from app.models.entities import (
     Product,
     RetailerState,
     Setting,
+    StoreRule,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "Product",
     "RetailerState",
     "Setting",
+    "StoreRule",
 ]

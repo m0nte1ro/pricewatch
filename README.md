@@ -114,7 +114,7 @@ The old files are retained in `pre-restore-*` for rollback. Migrations run again
 
 ## Browser fallback
 
-The standard image includes pinned Playwright and its matching **full Chromium**, including Linux libraries (KuantoKusta refuses the lighter headless shell). No browser software is needed on the host. Other browser engines are omitted to keep the image smaller.
+The standard image includes pinned Playwright and its matching **full Chromium**, including Linux libraries (KuantoKusta refuses the lighter headless shell, which is not installed). Playwright's video encoder (ffmpeg) is removed after install; nothing records video. No browser software is needed on the host. Other browser engines are omitted to keep the image smaller.
 
 HTTP remains the default. Enable **browser fallback** in the Web UI's Settings only when a retailer requires JavaScript. The existing fallback is serialized, blocks off-domain requests, and stops on CAPTCHA/human-verification challenges. Installing Chromium does not bypass blocked retailers or make partial adapters fully supported. Browser binaries belong to the image, while durable application state belongs to `./data`.
 

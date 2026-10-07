@@ -38,18 +38,17 @@ def update(db, snapshot):
         record_snapshot(session, listing.product, listing, snapshot)
 
 
-def test_history_changes_and_daily_sample(db, candidate):
+def test_history_row_on_every_check(db, candidate):
     create_product(db, candidate)
     snapshot = candidate.listing.model_copy(deep=True)
     update(db, snapshot)
+    update(db, snapshot)  # unchanged price, same hour: still recorded
     with db.session() as session:
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
-    snapshot.observed_at += timedelta(days=1, seconds=1)
-    update(db, snapshot)
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 3
     snapshot.price = Decimal("999")
     update(db, snapshot)
     with db.session() as session:
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 3
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 4
         assert session.scalar(select(Listing)).previous_price == Decimal("1199")
 
 
@@ -135,7 +134,7 @@ async def test_scheduled_due_check_and_blocked_retailer_isolation(site):
         assert rows["worten"].current_price == Decimal("1199")
         assert rows["fnac"].current_price == Decimal("799")
         assert rows["fnac"].next_check_at > now()
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 6
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 9
     assert "insane_deal" in events(runtime.db)
 
 

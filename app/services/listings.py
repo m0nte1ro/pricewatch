@@ -16,29 +16,16 @@ def record_snapshot(
     session, product: Product, listing: Listing, snapshot: Snapshot, *, initial: bool = False
 ):
     evaluate(session, product, listing, snapshot, initial=initial)
-    latest = session.scalar(
-        select(PriceHistory)
-        .where(PriceHistory.listing_id == listing.id)
-        .order_by(PriceHistory.timestamp.desc())
-        .limit(1)
-    )
-    changed = not latest or (
-        latest.price,
-        latest.availability,
-        latest.condition,
-        latest.currency,
-    ) != (snapshot.price, snapshot.availability, str(snapshot.condition), snapshot.currency)
-    if changed or latest.timestamp <= snapshot.observed_at - timedelta(hours=24):
-        session.add(
-            PriceHistory(
-                listing_id=listing.id,
-                timestamp=snapshot.observed_at,
-                price=snapshot.price,
-                availability=snapshot.availability,
-                condition=str(snapshot.condition),
-                currency=snapshot.currency,
-            )
+    session.add(
+        PriceHistory(
+            listing_id=listing.id,
+            timestamp=snapshot.observed_at,
+            price=snapshot.price,
+            availability=snapshot.availability,
+            condition=str(snapshot.condition),
+            currency=snapshot.currency,
         )
+    )
     if listing.current_price != snapshot.price:
         listing.previous_price = listing.current_price
         log.info("price_changed", extra={"listing_id": listing.id})

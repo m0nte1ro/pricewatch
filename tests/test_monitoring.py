@@ -4,8 +4,8 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 from app.models import Alert, Listing, PriceHistory, Product
-from app.schemas.domain import now
-from app.services.listings import add_candidates, record_snapshot
+from app.schemas.domain import Preferences, now
+from app.services.listings import add_candidates, effective_interval, record_snapshot
 from app.services.queries import QueryService, summary
 
 
@@ -38,18 +38,17 @@ def update(db, snapshot):
         record_snapshot(session, listing.product, listing, snapshot)
 
 
-def test_history_changes_and_daily_sample(db, candidate):
+def test_history_row_on_every_check(db, candidate):
     create_product(db, candidate)
     snapshot = candidate.listing.model_copy(deep=True)
     update(db, snapshot)
+    update(db, snapshot)  # unchanged price, same hour: still recorded
     with db.session() as session:
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
-    snapshot.observed_at += timedelta(days=1, seconds=1)
-    update(db, snapshot)
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 3
     snapshot.price = Decimal("999")
     update(db, snapshot)
     with db.session() as session:
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 3
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 4
         assert session.scalar(select(Listing)).previous_price == Decimal("1199")
 
 
@@ -67,11 +66,16 @@ def test_threshold_crossings_are_not_repeated(db, candidate):
     assert events(db).count("target_hit") == 2
 
 
-def test_disallowed_grade_c_never_triggers_deal(db, candidate):
+def test_any_saved_listing_alerts_whatever_its_condition(db, candidate):
+    # The owner picks every link; the link they saved is the filter, not a condition list.
     candidate.listing.condition = "outlet_grade_c"
     candidate.listing.price = Decimal("500")
-    create_product(db, candidate, conditions=["new", "outlet_grade_a"])
-    assert events(db) == ["outlet_listing"]
+    product_id = create_product(db, candidate)
+    assert events(db) == ["outlet_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        item = summary(session.get(Product, product_id))
+        assert item["best"].current_price == Decimal("500")
+        assert item["status"] == "INSANE DEAL"
 
 
 def test_allowed_grade_a_and_initial_threshold(db, candidate):
@@ -135,7 +139,7 @@ async def test_scheduled_due_check_and_blocked_retailer_isolation(site):
         assert rows["worten"].current_price == Decimal("1199")
         assert rows["fnac"].current_price == Decimal("799")
         assert rows["fnac"].next_check_at > now()
-        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 6
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 9
     assert "insane_deal" in events(runtime.db)
 
 
@@ -162,3 +166,124 @@ def test_out_of_stock_deal_price_is_recorded_but_never_alerts(db, candidate):
         "target_hit",
         "insane_deal",
     ]
+
+
+def test_heuristic_price_never_alerts_or_counts_as_best(db, candidate):
+    candidate.listing.method = "heuristic"
+    candidate.listing.price = Decimal("500")
+    product_id = create_product(db, candidate)
+    assert events(db) == ["new_listing"]
+    with db.session() as session:
+        item = summary(session.get(Product, product_id))
+        assert (item["best"], item["unavailable"], item["review"], item["status"]) == (
+            None,
+            None,
+            1,
+            "WATCHING",
+        )
+    update(db, candidate.listing.model_copy(update={"method": "rule"}))
+    assert events(db) == ["new_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        item = summary(session.get(Product, product_id))
+        assert item["best"].current_price == Decimal("500") and item["review"] == 0
+
+
+def test_effective_interval_precedence(db, candidate):
+    create_product(db, candidate)
+    prefs = Preferences(polling_minutes=120, retailer_intervals={"worten": 30})
+    with db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert effective_interval(listing, prefs) == 30
+        listing.check_interval_minutes = 15
+        assert effective_interval(listing, prefs) == 15
+        listing.check_interval_minutes = None
+        prefs.retailer_intervals = {}
+        assert effective_interval(listing, prefs) == 120
+        assert effective_interval(listing, None) == 60
+
+
+async def test_stored_listing_on_a_non_public_host_is_never_requested(site, candidate):
+    _, runtime, _, requests = site
+    candidate.listing.retailer, candidate.listing.url = "nas", "https://nas/admin"
+    create_product(runtime.db, candidate)
+    with runtime.db.session() as session:
+        session.scalar(select(Listing)).next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        assert (
+            session.scalar(select(Listing)).last_error
+            == "Only public https:// store links can be monitored"
+        )
+    assert requests == []
+
+
+def test_stock_alert_from_an_unconfirmed_reading_says_its_price_is_unconfirmed(db, candidate):
+    candidate.listing.availability = "out_of_stock"
+    create_product(db, candidate)
+    back = {"availability": "in_stock", "method": "heuristic"}
+    update(db, candidate.listing.model_copy(update=back))
+    update(db, candidate.listing.model_copy(update={"method": "rule"}))
+    update(db, candidate.listing.model_copy(update={**back, "method": "rule"}))
+    with db.session() as session:
+        messages = list(
+            session.scalars(
+                select(Alert.message)
+                .where(Alert.event_type == "became_available")
+                .order_by(Alert.id)
+            )
+        )
+    assert messages[0].endswith("· 1199.00 → 1199.00 EUR (price unconfirmed)")
+    assert messages[1].endswith("· 1199.00 → 1199.00 EUR")
+
+
+def test_unconfirmed_history_never_sets_the_low_high_or_first_price(db, candidate):
+    start = now() - timedelta(days=10)
+    candidate.listing.method, candidate.listing.price = "heuristic", Decimal("400")
+    candidate.listing.observed_at = start
+    product_id = create_product(db, candidate)
+    for offset, method, price in (
+        (timedelta(days=1), "rule", "1199"),
+        (timedelta(days=2), "rule", "1100"),
+        (timedelta(days=9), "heuristic", "300"),
+        (timedelta(days=9, minutes=1), "heuristic", "2000"),
+    ):
+        reading = {"method": method, "price": Decimal(price), "observed_at": start + offset}
+        update(db, candidate.listing.model_copy(update=reading))
+    detail = QueryService(db).detail(product_id)
+    assert (detail["low"], detail["high"], detail["first"], detail["days_since_low"]) == (
+        Decimal("1100"),
+        Decimal("1199"),
+        Decimal("1199"),
+        8,
+    )
+    assert QueryService(db).dashboard()[0]["low"] == Decimal("1100")
+    with db.session() as session:
+        rows = session.scalars(select(PriceHistory.method).order_by(PriceHistory.timestamp))
+        assert list(rows) == ["heuristic", "rule", "rule", "heuristic", "heuristic"]
+
+
+def test_promo_code_price_drives_alerts_best_price_and_history(db, candidate):
+    candidate.listing.price = Decimal("1199")
+    candidate.listing.promo_price = Decimal("789.00")
+    candidate.listing.promo_code = "TV20"
+    product_id = create_product(db, candidate)  # target 900, insane 800
+    assert events(db) == ["new_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        messages = {a.event_type: a.message for a in session.scalars(select(Alert))}
+        assert "789.00 EUR with code TV20" in messages["insane_deal"]
+        listing = session.scalar(select(Listing))
+        assert (listing.current_price, listing.promo_price, listing.promo_code) == (
+            Decimal("1199"),
+            Decimal("789"),
+            "TV20",
+        )
+        assert session.scalar(select(PriceHistory)).promo_price == Decimal("789")
+        assert summary(session.get(Product, product_id))["best"].deal_price == Decimal("789")
+    # The code expires: back to the shelf price, which is above both thresholds.
+    update(db, candidate.listing.model_copy(update={"promo_price": None, "promo_code": None}))
+    assert events(db)[-1] == "insane_deal"
+    # A new code brings the deal back: a drop and a fresh threshold crossing.
+    update(db, candidate.listing.model_copy())
+    assert events(db)[-3:] == ["price_dropped", "target_hit", "insane_deal"]
+    detail = QueryService(db).detail(product_id)
+    assert (detail["low"], detail["high"]) == (Decimal("789"), Decimal("1199"))

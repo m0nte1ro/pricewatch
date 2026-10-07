@@ -22,7 +22,6 @@ async def main():
                 "category": "tv",
                 "target_price": None,
                 "insane_deal_price": None,
-                "conditions": ["new"],
                 "retailers": ["worten", "darty", "radiopopular"],
                 "urls": [
                     "https://www.darty.pt/products/smart-tv-tcl-55p8l-qd-mini-led-55-uhd-4k-google-tv-140cm-5901292530204"

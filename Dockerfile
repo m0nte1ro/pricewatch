@@ -12,7 +12,8 @@ WORKDIR /opt/pricewatch
 # Keep dependency/browser layers cached when only application code changes.
 COPY requirements.lock requirements-browser.lock ./
 RUN pip install --no-cache-dir -r requirements-browser.lock \
-    && python -m playwright install --with-deps --only-shell chromium \
+    && python -m playwright install --with-deps --no-shell chromium \
+    && rm -rf /opt/pricewatch-browsers/ffmpeg-* \
     && apt-get install -y --no-install-recommends gosu \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 pricewatch \

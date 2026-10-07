@@ -25,6 +25,8 @@ class RetailerAdapter:
     # Used only when the page shows no condition evidence. First-party stores selling only new
     # stock may set NEW; marketplaces must stay UNKNOWN so alerts never assume new.
     default_condition = Condition.UNKNOWN
+    # Stores without a usable search (link-only) are left out of store search and its switches.
+    searchable = True
     # Seconds between requests to this store; None uses the fetcher default (2 s).
     request_interval: float | None = None
 
@@ -170,17 +172,23 @@ class RetailerAdapter:
             raise ScrapeError("No reliable price or stock found; adapter may need updating")
         return result
 
-    async def fetch_listing(self, url: str) -> list[Snapshot]:
+    async def fetch_listing(self, url: str, *, alternatives: bool = False) -> list[Snapshot]:
+        """`alternatives` also lists the page's prices for the owner to confirm one."""
         url = self.normalize_url(url)
         if not self.is_product_url(url):
             raise ScrapeError("Use a product page URL, not a search or category page")
         html = await self.fetcher.get(url, self.name, self.hosts)
         try:
-            return self.parse(html, url)
+            return self.parse_page(html, url, alternatives)
         except ScrapeError:
             if not self.fetcher.get_preferences().playwright_enabled:
                 raise
-            return self.parse(await self.fetcher.render(url, self.name, self.hosts), url)
+            html = await self.fetcher.render(url, self.name, self.hosts)
+            return self.parse_page(html, url, alternatives)
+
+    def parse_page(self, html: str, url: str, alternatives: bool) -> list[Snapshot]:
+        # Only the generic reader has other prices to offer; dedicated adapters ignore it.
+        return self.parse(html, url)
 
     def search_links(self, html: str, identity: Identity) -> list[str]:
         soup = BeautifulSoup(html, "html.parser")

@@ -4,12 +4,12 @@ import uuid
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
-
 from app.models import DiscoveryDraft, Product
-from app.retailers.parsing import ScrapeError
+from app.retailers.generic import GenericAdapter
+from app.retailers.http import user_waiting
+from app.retailers.parsing import BlockedError, ScrapeError
 from app.schemas.domain import Candidate, Condition, Identity
-from app.services.listings import add_candidates
+from app.services.listings import add_candidates, unread_snapshot
 from app.services.matching import deduplicate, identify, match_identity
 
 log = logging.getLogger(__name__)
@@ -19,6 +19,9 @@ class DiscoveryService:
     def __init__(self, db, registry, settings):
         self.db, self.registry, self.settings = db, registry, settings
         self.capacity = asyncio.Semaphore(2)
+        # Rate-limited stores can make a discovery slow, but it must end so the page and the
+        # second discovery slot are never held forever.
+        self.timeout = 300
 
     def create(self, payload: dict, product_id: int | None = None) -> str:
         draft_id = str(uuid.uuid4())
@@ -29,7 +32,15 @@ class DiscoveryService:
     async def run(self, draft_id: str):
         async with self.capacity:
             try:
-                await self._discover(draft_id)
+                with user_waiting():
+                    await asyncio.wait_for(self._discover(draft_id), self.timeout)
+            except TimeoutError:
+                log.warning("discovery_timed_out")
+                self._fail(
+                    draft_id,
+                    f"Discovery took longer than {self.timeout // 60} minutes and was stopped. "
+                    "A store may be rate limiting requests: try again with fewer stores selected.",
+                )
             except asyncio.CancelledError:
                 self._fail(draft_id, "Discovery interrupted by shutdown. Please retry.")
                 raise
@@ -54,7 +65,7 @@ class DiscoveryService:
         for url in payload["urls"]:
             try:
                 retailers.add(self.registry.for_url(url).name)
-            except ScrapeError:
+            except (ScrapeError, ValueError):
                 pass
         self.registry.fetcher.retry_now(retailers)
         # Manual sources seed identity but never replace the independent retailer searches.
@@ -66,7 +77,14 @@ class DiscoveryService:
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
-                manual.extend(await adapter.fetch_listing(url))
+                manual.extend(await adapter.fetch_listing(url, alternatives=True))
+            except BlockedError as exc:
+                # The store refuses requests right now; a pasted link is still kept.
+                manual.append(unread_snapshot(adapter, url))
+                errors.append(
+                    f"Manual URL ({urlsplit(url).hostname}): {exc} "
+                    "The link is kept and read automatically once the store allows it."
+                )
             except (ScrapeError, ValueError) as exc:
                 errors.append(f"Manual URL ({urlsplit(url).hostname}): {exc}")
             except Exception:
@@ -158,6 +176,39 @@ class DiscoveryService:
             draft.status = "ready"
         log.info("discovery_complete", extra={"count": len(candidates)})
 
+    async def teach(
+        self, draft_id: str, index: int, price: Decimal, availability: str | None
+    ) -> None:
+        with self.db.session() as session:
+            draft = session.get(DiscoveryDraft, draft_id)
+            if draft is None:
+                raise ValueError("Discovery not found")
+            if draft.status != "ready":
+                raise ValueError("Discovery is not ready")
+            if not 0 <= index < len(draft.results["candidates"]):
+                raise ValueError("Invalid listing selection")
+            url = draft.results["candidates"][index]["listing"]["url"]
+        adapter = self.registry.for_url(url)
+        if not isinstance(adapter, GenericAdapter):
+            raise ValueError("Only generic stores can be taught")
+        with user_waiting():
+            html = await adapter.fetcher.get(url, adapter.name, adapter.hosts)
+        snapshot = adapter.learn(html, url, price, availability)
+        with self.db.session() as session:
+            draft = session.get(DiscoveryDraft, draft_id)
+            identity = Identity.model_validate(draft.results["identity"])
+            candidates = list(draft.results["candidates"])
+            candidates[index] = {
+                **candidates[index],
+                "listing": snapshot.model_dump(mode="json"),
+                "match": match_identity(identity, snapshot.identity, snapshot.condition).model_dump(
+                    mode="json"
+                ),
+            }
+            # A new dict: the JSON column does not track changes made inside the old one.
+            draft.results = {**draft.results, "candidates": candidates}
+        log.info("store_rule_taught", extra={"retailer": adapter.name})
+
     def confirm(self, draft_id: str, selected: list[int]) -> int:
         preferences = self.settings.get()
         with self.db.session() as session:
@@ -173,19 +224,12 @@ class DiscoveryService:
             if any(i < 0 or i >= len(candidates) for i in selected):
                 raise ValueError("Invalid listing selection")
             chosen = [candidates[i] for i in set(selected)]
-            if any(c.match.level == "CONFLICT" for c in chosen):
+            # A link the user pasted is saved as pasted; only search results must match.
+            if any(c.match.level == "CONFLICT" and "manual" not in c.sources for c in chosen):
                 raise ValueError("Conflicting models cannot be merged into this product")
+            # "Find / add listings" adds to its product; a new product is always new, so the
+            # same model can be watched more than once (e.g. with different targets).
             product = session.get(Product, draft.product_id) if draft.product_id else None
-            if product is None and identity.model:
-                matches = session.scalars(
-                    select(Product).where(
-                        Product.model == identity.model, Product.archived.is_(False)
-                    )
-                ).all()
-                product = next(
-                    (p for p in matches if p.brand == identity.brand and p.size == identity.size),
-                    None,
-                )
             if product and product.archived:
                 raise ValueError("Restore the archived product before adding listings")
             if product is None:
@@ -202,7 +246,6 @@ class DiscoveryService:
                     insane_deal_price=Decimal(draft.payload["insane_deal_price"])
                     if draft.payload["insane_deal_price"]
                     else None,
-                    allowed_conditions=draft.payload["conditions"],
                     retailers=draft.payload["retailers"],
                 )
                 session.add(product)

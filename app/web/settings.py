@@ -5,8 +5,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.models import Alert, RetailerState
-from app.schemas.domain import Condition, Preferences
+from app.models import Alert, Listing, RetailerState
+from app.schemas.domain import Preferences
 from app.web.common import protected, render, selection
 
 router = APIRouter()
@@ -18,7 +18,12 @@ async def settings_page(request: Request, saved: bool = False):
     with runtime.db.session() as session:
         states = {s.name: s for s in session.scalars(select(RetailerState))}
     return render(
-        request, "settings.html", preferences=runtime.settings.get(), states=states, saved=saved
+        request,
+        "settings.html",
+        preferences=runtime.settings.get(),
+        states=states,
+        rules=runtime.rules.all(),
+        saved=saved,
     )
 
 
@@ -37,7 +42,6 @@ async def save_settings(request: Request):
             polling_minutes=form.get("polling_minutes", 60),
             retailer_intervals=intervals,
             enabled_retailers=selection(form, "retailers", runtime.registry.adapters),
-            allowed_conditions=selection(form, "conditions", list(Condition)),
             user_agent=str(form.get("user_agent", ""))[:500],
             request_timeout=form.get("request_timeout", 20),
             proxy=""
@@ -66,6 +70,12 @@ async def save_settings(request: Request):
     return RedirectResponse("/settings?saved=true", 303)
 
 
+@router.post("/settings/rules/{host}/forget", dependencies=[Depends(protected)])
+async def forget_rule(request: Request, host: str):
+    request.app.state.runtime.rules.delete(host)
+    return RedirectResponse("/settings", 303)
+
+
 @router.get("/alerts")
 async def alerts_page(request: Request, page: int = 1):
     page = max(1, page)
@@ -73,7 +83,18 @@ async def alerts_page(request: Request, page: int = 1):
         alerts = session.scalars(
             select(Alert).order_by(Alert.id.desc()).offset((page - 1) * 50).limit(51)
         ).all()
-    return render(request, "alerts.html", alerts=alerts[:50], page=page, has_more=len(alerts) > 50)
+        ids = {a.listing_id for a in alerts if a.listing_id}
+        listing_urls = dict(
+            session.execute(select(Listing.id, Listing.url).where(Listing.id.in_(ids))).all()
+        )
+    return render(
+        request,
+        "alerts.html",
+        alerts=alerts[:50],
+        page=page,
+        has_more=len(alerts) > 50,
+        listing_urls=listing_urls,
+    )
 
 
 @router.post("/alerts/{alert_id}/read", dependencies=[Depends(protected)])

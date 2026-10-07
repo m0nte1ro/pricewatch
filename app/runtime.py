@@ -13,6 +13,7 @@ from app.services.discovery import DiscoveryService
 from app.services.monitoring import MonitoringService
 from app.services.notifications import NotificationService
 from app.services.queries import QueryService
+from app.services.rules import RuleService
 from app.services.settings import SettingsService
 
 log = logging.getLogger(__name__)
@@ -22,8 +23,9 @@ class Runtime:
     def __init__(self, config, db):
         self.config, self.db = config, db
         self.settings = SettingsService(db)
-        self.fetcher = Fetcher(db, self.settings.get)
-        self.registry = Registry(self.fetcher)
+        self.fetcher = Fetcher(db, self.settings.get, profile_dir=config.data_dir / "browser")
+        self.rules = RuleService(db)
+        self.registry = Registry(self.fetcher, self.rules)
         self.notifications = NotificationService(db, self.settings)
         self.discovery = DiscoveryService(db, self.registry, self.settings)
         self.monitor = MonitoringService(db, self.registry, self.settings, self.notifications)

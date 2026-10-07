@@ -1,4 +1,5 @@
 import json
+import re
 from decimal import Decimal
 
 import pytest
@@ -155,18 +156,6 @@ def test_darty_first_party_offer_without_markers_is_new(registry):
     assert listing.retailer_product_id == "T00250456"
 
 
-def test_radio_live_microdata(registry):
-    listing = registry.adapters["radiopopular"].parse(
-        (FIXTURES / "radio_live.html").read_text(),
-        "https://www.radiopopular.pt/produto/tv-tcl-85c7l",
-    )[0]
-    assert listing.price == Decimal("2699.99")
-    assert listing.availability == "out_of_stock"
-    assert listing.identity.model == "85C7L"
-    assert listing.condition == "new"
-    assert listing.retailer_product_id == "F126186"
-
-
 def test_first_party_default_never_hides_outlet_markers(registry):
     html = (
         '<h1>TV TCL 55P8L Outlet Grade B</h1><span itemprop="price" content="399.99"></span>'
@@ -309,3 +298,148 @@ async def test_search_falls_back_from_name_to_model_to_barcode():
     links = await DartyAdapter(fetcher).search_product(identity)
     assert fetcher.queries == ["85C7K", "TCL 85C7K", "5901292525712"]
     assert len(links) == 1
+
+
+RADIO_URL = "https://www.radiopopular.pt/produto/tv-tcl-85c7l"
+
+
+def radio_page(**replacements):
+    html = (FIXTURES / "radio_85c7l_promo_live.html").read_text()
+    for old, new in replacements.items():
+        assert old in html, old
+        html = html.replace(old, new)
+    return html
+
+
+def test_radio_popular_reads_the_product_header_not_similar_products(registry):
+    # Live page: the "similar products" carousel carries its own itemprop price (2.699,99),
+    # stock and sku before the product's; the header holds the product's real figures.
+    listing = registry.adapters["radiopopular"].parse(radio_page(), RADIO_URL)[0]
+    assert (listing.title, listing.identity.model) == ("TV TCL 85C7L", "85C7L")
+    assert listing.price == Decimal("2499.99")
+    assert (listing.promo_price, listing.promo_code) == (Decimal("1999.99"), "TV20")
+    assert listing.deal_price == Decimal("1999.99")
+    assert (listing.availability, listing.condition) == ("in_stock", "new")
+    assert listing.retailer_product_id == "134791"
+
+
+def test_radio_popular_without_a_promo_code(registry):
+    html = re.sub(r'<div class="price-promocode-bar".*?</span></div>', "", radio_page(), flags=re.S)
+    listing = registry.adapters["radiopopular"].parse(html, RADIO_URL)[0]
+    assert (listing.promo_price, listing.promo_code, listing.deal_price) == (
+        None,
+        None,
+        Decimal("2499.99"),
+    )
+
+
+@pytest.mark.parametrize(
+    "button,expected",
+    [
+        ("Esgotado", "out_of_stock"),  # a sold-out label where the cart button was
+        ("", "unknown"),  # no cart button and no stock text: never assume in stock
+    ],
+)
+def test_radio_popular_stock_comes_from_the_product_header(registry, button, expected):
+    html = re.sub(
+        r'<div class="rp-button-blue buy[^"]*"[^>]*>.*?Adicionar ao carrinho\s*</div>',
+        f'<div class="unavailable">{button}</div>',
+        radio_page(),
+        flags=re.S,
+    )
+    listing = registry.adapters["radiopopular"].parse(html, RADIO_URL)[0]
+    assert listing.availability == expected
+
+
+KK_URL = "https://www.kuantokusta.pt/p/12121920/tcl-85-85c7l-sqd-miniled-smart-google-tv-4k"
+
+
+def test_kuantokusta_keeps_the_lowest_price_including_shipping(registry):
+    # Chipman has the lowest sticker price (1708.95) but 124.99 shipping; Hipermercado's
+    # 1748.18 with free shipping is what you would pay.
+    page = (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+    listing = registry.adapters["kuantokusta"].parse(page, KK_URL)[0]
+    assert listing.price == Decimal("1748.18")
+    assert listing.offered_by == "Hipermercado · free shipping"
+    assert (listing.availability, listing.condition) == ("in_stock", "new")
+    assert listing.identity.model == "85C7L"
+    assert listing.identity.identifiers["gtin"] == "5901292529925"
+    assert listing.retailer_product_id == "12121920"
+
+
+def test_kuantokusta_names_paid_shipping():
+    adapter = Registry(Fetcher(None, None)).adapters["kuantokusta"]
+    page = (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+    page = page.replace(
+        '"Hipermercado", "storeSlug": "hipermercado", "price": 1748.18',
+        '"Hipermercado", "storeSlug": "hipermercado", "price": 1799.0',
+    )
+    listing = adapter.parse(page, KK_URL)[0]
+    assert (listing.price, listing.offered_by) == (Decimal("1748.23"), "Tek4Life · €28.33 shipping")
+
+
+def test_kuantokusta_without_offers_is_out_of_stock(registry):
+    page = re.sub(
+        r'"offers": \[.*\]', '"offers": []', (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+    )
+    listing = registry.adapters["kuantokusta"].parse(page, KK_URL)[0]
+    assert (listing.price, listing.availability, listing.offered_by) == (None, "out_of_stock", None)
+
+
+def test_kuantokusta_urls_drop_search_tracking(registry):
+    adapter = registry.adapters["kuantokusta"]
+    assert adapter.normalize_url(KK_URL + "?queryId=527e58ffae478faa4ac00bee969daa90") == KK_URL
+    assert registry.for_url("https://kuantokusta.pt/p/12121920/x").name == "kuantokusta"
+
+
+async def test_kuantokusta_is_read_through_the_browser():
+    pages = []
+
+    class BrowserOnly(Fetcher):
+        async def get(self, *args, **kwargs):  # plain requests get "Access Denied"
+            raise AssertionError("KuantoKusta must not be fetched with plain HTTP")
+
+        async def browse(self, url, retailer, hosts):
+            pages.append((url, retailer))
+            return (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+
+    adapter = Registry(BrowserOnly(None, None)).adapters["kuantokusta"]
+    listing = (await adapter.fetch_listing(KK_URL + "?queryId=x"))[0]
+    assert pages == [(KK_URL, "kuantokusta")]
+    assert listing.price == Decimal("1748.18")
+
+
+WORTEN_85C7L = (
+    "https://www.worten.pt/produtos/tv-tcl-85c7l-sqd-miniled-85-216-cm-4k-ultra-hd-smart-tv-8846682"
+)
+
+
+def test_worten_reads_the_coupon_price_it_shows(registry):
+    # "Preço com cupão: 1.999,20 · Aplica o cupão TCL20" next to the 2.499,00 shelf price.
+    page = (FIXTURES / "worten_85c7l_coupon.html").read_text()
+    listing = registry.adapters["worten"].parse(page, WORTEN_85C7L)[0]
+    assert listing.price == Decimal("2499.00")
+    assert (listing.promo_price, listing.promo_code) == (Decimal("1999.20"), "TCL20")
+    assert listing.deal_price == Decimal("1999.20")
+    assert (listing.availability, listing.seller) == ("in_stock", "Worten")
+
+
+def test_worten_works_out_the_coupon_price_from_its_flag(registry):
+    # Worten's server sends only the "-20% c/ cupão TCL20" flag; its page script shows
+    # 2.499,00 × 0.8 = 1.999,20. The biggest coupon wins (HOTDAYS is -10%).
+    page = (FIXTURES / "worten_85c7l_coupon.html").read_text()
+    start = page.index('<div class="price-with-coupon">')
+    end = page.index('<div class="product-price-info__seller--inline')
+    listing = registry.adapters["worten"].parse(page[:start] + page[end:], WORTEN_85C7L)[0]
+    assert (listing.promo_price, listing.promo_code) == (Decimal("1999.20"), "TCL20")
+
+
+def test_worten_store_credit_flags_are_not_a_price(registry):
+    page = (FIXTURES / "worten_85c7l_coupon.html").read_text()
+    start = page.index('<div class="price-with-coupon">')
+    end = page.index('<div class="product-price-info__seller--inline')
+    page = page[:start] + page[end:]
+    for coupon in ("-20% c/ cupão TCL20", "-10% c/ cupão HOTDAYS"):
+        page = page.replace(coupon, "Envio grátis")
+    listing = registry.adapters["worten"].parse(page, WORTEN_85C7L)[0]
+    assert (listing.promo_price, listing.promo_code) == (None, None)  # "10% extra em talão" stays

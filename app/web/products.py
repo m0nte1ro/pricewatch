@@ -1,8 +1,24 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import delete, update
+from sqlalchemy.orm import joinedload
 
-from app.models import Listing, Product
-from app.web.common import amount, get_product, protected, render, selection, validate_thresholds
+from app.models import Alert, Listing, PriceHistory, Product
+from app.retailers.http import user_waiting
+from app.retailers.parsing import ScrapeError
+from app.schemas.domain import now
+from app.services.listings import add_link, confirm_listing_price, verify_offer
+from app.web.common import (
+    amount,
+    confirmed_price,
+    full_https,
+    get_product,
+    protected,
+    render,
+    validate_thresholds,
+)
 
 router = APIRouter()
 
@@ -24,14 +40,18 @@ async def dashboard(request: Request, archived: bool = False):
 async def new_product(request: Request, product_id: int | None = None):
     runtime = request.app.state.runtime
     product = get_product(runtime, product_id)["product"] if product_id else None
-    return render(request, "add.html", preferences=runtime.settings.get(), product=product)
+    return render(request, "add.html", product=product)
 
 
 @router.get("/products/{product_id}")
-async def product_detail(request: Request, product_id: int):
+async def product_detail(request: Request, product_id: int, added: int | None = None):
     runtime = request.app.state.runtime
     return render(
-        request, "product.html", **get_product(runtime, product_id), monitor=runtime.monitor
+        request,
+        "product.html",
+        **get_product(runtime, product_id),
+        monitor=runtime.monitor,
+        added=added,
     )
 
 
@@ -51,9 +71,6 @@ async def edit_product(request: Request, product_id: int):
     form = await request.form()
     target, insane = amount(form, "target_price"), amount(form, "insane_deal_price")
     validate_thresholds(target, insane)
-    from app.schemas.domain import Condition
-
-    conditions = selection(form, "conditions", list(Condition))
     name = str(form.get("canonical_name", "")).strip()
     if not name or len(name) > 250:
         raise HTTPException(422, "A product name of 1–250 characters is required")
@@ -61,7 +78,6 @@ async def edit_product(request: Request, product_id: int):
         product = session.get(Product, product_id)
         product.canonical_name = name
         product.target_price, product.insane_deal_price = target, insane
-        product.allowed_conditions = conditions
         product.enabled = form.get("enabled") == "on"
     return RedirectResponse(f"/products/{product_id}", 303)
 
@@ -76,6 +92,38 @@ async def archive_product(request: Request, product_id: int):
     return RedirectResponse("/", 303)
 
 
+@router.post("/products/{product_id}/links", dependencies=[Depends(protected)])
+async def add_product_link(request: Request, product_id: int):
+    runtime = request.app.state.runtime
+    get_product(runtime, product_id)
+    form = await request.form()
+    url = str(form.get("url", "")).strip()
+    if len(url) > 2048 or not full_https(url):
+        raise HTTPException(422, "Product links must be full https:// URLs")
+    try:
+        added = await add_link(
+            runtime.db, runtime.registry, product_id, url, runtime.settings.get()
+        )
+    except (ScrapeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    runtime.spawn(runtime.notifications.deliver())
+    return RedirectResponse(f"/products/{product_id}?added={added}", 303)
+
+
+@router.post("/listings/{listing_id}/delete", dependencies=[Depends(protected)])
+async def delete_listing(request: Request, listing_id: int):
+    """Stop tracking a link: the listing and its price history go; events stay, unlinked."""
+    with request.app.state.runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        if listing is None:
+            raise HTTPException(404, "Listing not found")
+        product_id = listing.product_id
+        session.execute(delete(PriceHistory).where(PriceHistory.listing_id == listing_id))
+        session.execute(update(Alert).where(Alert.listing_id == listing_id).values(listing_id=None))
+        session.delete(listing)
+    return RedirectResponse(f"/products/{product_id}", 303)
+
+
 @router.post("/listings/{listing_id}/toggle", dependencies=[Depends(protected)])
 async def toggle_listing(request: Request, listing_id: int):
     runtime = request.app.state.runtime
@@ -86,6 +134,79 @@ async def toggle_listing(request: Request, listing_id: int):
         listing.enabled = not listing.enabled
         product_id = listing.product_id
     return RedirectResponse(f"/products/{product_id}", 303)
+
+
+@router.post("/listings/{listing_id}/interval", dependencies=[Depends(protected)])
+async def listing_interval(request: Request, listing_id: int):
+    runtime = request.app.state.runtime
+    value = str((await request.form()).get("minutes", "")).strip()
+    minutes = None
+    if value:
+        try:
+            minutes = int(value)
+            if not 5 <= minutes <= 10080:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(422, "Interval must be between 5 and 10080 minutes") from None
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        if listing is None:
+            raise HTTPException(404, "Listing not found")
+        listing.check_interval_minutes = minutes
+        if minutes is not None:
+            listing.next_check_at = min(listing.next_check_at, now() + timedelta(minutes=minutes))
+        product_id = listing.product_id
+    return RedirectResponse(f"/products/{product_id}", 303)
+
+
+def generic_listing(runtime, listing_id: int) -> Listing:
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id, options=[joinedload(Listing.product)])
+    if listing is None:
+        raise HTTPException(404, "Listing not found")
+    if listing.retailer in runtime.registry.adapters:
+        raise HTTPException(404, "Only generic store listings can be taught")
+    if not listing.enabled or not listing.product.enabled or listing.product.archived:
+        raise HTTPException(
+            422, "This listing is not monitored: enable it, and resume or restore its product"
+        )
+    return listing
+
+
+@router.get("/listings/{listing_id}/confirm-price")
+async def listing_confirm_form(request: Request, listing_id: int):
+    runtime = request.app.state.runtime
+    listing = generic_listing(runtime, listing_id)
+    context = {"listing": listing, "product": listing.product, "title": listing.title}
+    try:
+        adapter = runtime.registry[listing.retailer]
+        with user_waiting():
+            snapshots = await adapter.fetch_listing(listing.url, alternatives=True)
+    except ScrapeError as exc:
+        return render(request, "listing_confirm.html", **context, error=str(exc))
+    snapshot, error = verify_offer(listing, snapshots)
+    # Show what the page names now: after a model change the saved title would hide it.
+    context["title"] = snapshots[0].title
+    if error:
+        return render(request, "listing_confirm.html", **context, error=error)
+    return render(
+        request, "listing_confirm.html", **context, snapshot=snapshot.model_dump(mode="json")
+    )
+
+
+@router.post("/listings/{listing_id}/confirm-price", dependencies=[Depends(protected)])
+async def confirm_listing(request: Request, listing_id: int):
+    runtime = request.app.state.runtime
+    listing = generic_listing(runtime, listing_id)
+    price, availability = confirmed_price(await request.form())
+    preferences = runtime.settings.get()
+    try:
+        adapter = runtime.registry[listing.retailer]
+        await confirm_listing_price(runtime.db, adapter, listing, price, availability, preferences)
+    except (ScrapeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    runtime.spawn(runtime.notifications.deliver())
+    return RedirectResponse(f"/products/{listing.product_id}", 303)
 
 
 @router.post("/checks", dependencies=[Depends(protected)])

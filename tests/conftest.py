@@ -20,6 +20,10 @@ URLS = {
     "radiopopular": "https://www.radiopopular.pt/produto/tv-tcl-85c7k",
     "amazon_es": "https://www.amazon.es/dp/B012345678",
 }
+# Pages of stores without a dedicated adapter, keyed by full URL; a (status, location) tuple
+# answers that URL with a redirect, and an int under a bare host answers every request to that
+# host with that status.
+GENERIC_PAGES: dict[str, str | int | tuple[int, str]] = {}
 
 
 @pytest.fixture
@@ -54,6 +58,7 @@ def candidate(snapshot):
 
 @pytest.fixture
 def site(db, tmp_path):
+    GENERIC_PAGES.clear()
     app = create_app(Config(data_dir=tmp_path, scheduler_enabled=False), database=db)
     runtime = app.state.runtime
     runtime.fetcher.min_delay = 0
@@ -64,6 +69,15 @@ def site(db, tmp_path):
     def respond(request):
         requests.append(str(request.url))
         host = request.url.host
+        if isinstance(status := GENERIC_PAGES.get(host), int):
+            return httpx.Response(status)
+        page = GENERIC_PAGES.get(str(request.url))
+        if isinstance(page, str):
+            return httpx.Response(200, text=page)
+        if isinstance(page, tuple):
+            return httpx.Response(page[0], headers={"location": page[1]})
+        if not any(host in url for url in URLS.values()):
+            return httpx.Response(404)
         retailer = next(name for name, url in URLS.items() if host in url)
         if request.url.path == "/worten-api/search-products":
             return httpx.Response(
@@ -90,6 +104,9 @@ def site(db, tmp_path):
         )
         if is_search:
             return httpx.Response(200, text=f'<a href="{URLS[retailer]}">TCL 85C7K</a>')
+        if prices[retailer] == "rate_limited":
+            # Live Darty: Retry-After 60 on every request. Interactive paths must not wait.
+            return httpx.Response(429, headers={"Retry-After": "60"})
         if prices[retailer] == "blocked":
             return httpx.Response(403, text="Forbidden")
         data = {

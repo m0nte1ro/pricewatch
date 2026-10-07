@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
-from app.schemas.domain import Condition
+from app.retailers.parsing import money
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 TEMPLATES.env.filters["money"] = lambda value: f"€{value:,.2f}" if value is not None else "—"
@@ -21,11 +21,18 @@ def render(request: Request, template: str, **context):
         name=template,
         context={
             "csrf": request.state.csrf,
-            "retailers": request.app.state.runtime.registry.adapters,
-            "conditions": [str(c) for c in Condition],
+            "retailers": request.app.state.runtime.registry,
             **context,
         },
     )
+
+
+def full_https(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:  # e.g. "https://www.[::1]/p"
+        return False
+    return parts.scheme == "https" and bool(parts.hostname)
 
 
 async def protected(request: Request):
@@ -50,6 +57,16 @@ def amount(form, name: str) -> str | None:
         return str(result.quantize(Decimal(".01")))
     except (InvalidOperation, ValueError):
         raise HTTPException(422, "Prices must be positive finite amounts") from None
+
+
+def confirmed_price(form) -> tuple[Decimal, str | None]:
+    price = money(form.get("price"))
+    if price is None:
+        raise HTTPException(422, "Enter the price as shown on the page, e.g. 1299,99")
+    availability = str(form.get("availability", ""))
+    if availability not in ("in_stock", "out_of_stock", "unknown"):
+        raise HTTPException(422, "Invalid availability")
+    return price, None if availability == "unknown" else availability
 
 
 def validate_thresholds(target, insane):

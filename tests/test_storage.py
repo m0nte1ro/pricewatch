@@ -25,6 +25,10 @@ def test_migration_upgrade_and_downgrade(tmp_path):
         "retailer_states",
         "settings",
     } <= set(inspect(engine).get_table_names())
+    assert "store_rules" in inspect(engine).get_table_names()
+    columns = {c["name"] for c in inspect(engine).get_columns("listings")}
+    assert {"check_interval_minutes", "extraction_method"} <= columns
+    assert "method" in {c["name"] for c in inspect(engine).get_columns("price_history")}
     command.check(config)
     command.downgrade(config, "base")
     assert inspect(engine).get_table_names() == ["alembic_version"]

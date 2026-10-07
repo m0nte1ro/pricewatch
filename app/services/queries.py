@@ -1,10 +1,22 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 
 from app.models import Alert, Listing, PriceHistory, Product
-from app.schemas.domain import now
+from app.schemas.domain import lower_price, now
+
+# Unconfirmed (heuristic) prices are charted but may be a wrong element's amount, so they never
+# become a historical low, high or first price.
+CONFIRMED_EUR = (PriceHistory.currency == "EUR", PriceHistory.method != "heuristic")
+# What the owner could have paid at that moment: the promo-code price when it was lower.
+DEAL = case(
+    (
+        and_(PriceHistory.promo_price.is_not(None), PriceHistory.promo_price < PriceHistory.price),
+        PriceHistory.promo_price,
+    ),
+    else_=PriceHistory.price,
+)
 
 
 def summary(product: Product, low: Decimal | None = None) -> dict:
@@ -12,31 +24,31 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
     eligible = [
         x
         for x in active
-        if x.current_price is not None
+        if x.deal_price is not None
         and x.currency == "EUR"
         and x.availability == "in_stock"
-        and x.condition in product.allowed_conditions
         and not x.last_error
+        and x.extraction_method != "heuristic"
     ]
-    best = min(eligible, key=lambda x: x.current_price, default=None)
+    best = min(eligible, key=lambda x: x.deal_price, default=None)
     # Shown when nothing is buyable: the price is still recorded, but clearly not a deal.
     unavailable = min(
         (
             x
             for x in active
-            if x.current_price is not None
+            if x.deal_price is not None
             and x.currency == "EUR"
             and x.availability != "in_stock"
-            and x.condition in product.allowed_conditions
+            and x.extraction_method != "heuristic"
         ),
-        key=lambda x: x.current_price,
+        key=lambda x: x.deal_price,
         default=None,
     )
     status = "WATCHING"
     if active and all(x.availability == "out_of_stock" and not x.last_error for x in active):
         status = "OUT OF STOCK"
     if best:
-        price = best.current_price
+        price = best.deal_price
         if product.insane_deal_price is not None and price <= product.insane_deal_price:
             status = "INSANE DEAL"
         elif product.target_price is not None and price <= product.target_price:
@@ -51,7 +63,7 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
         "status": status,
         "active_count": len(active),
         "last_checked": max((x.last_checked_at for x in active if x.last_checked_at), default=None),
-        "errors": sum(bool(x.last_error) for x in active),
+        "review": sum(bool(x.last_error) or x.extraction_method == "heuristic" for x in active),
     }
 
 
@@ -68,9 +80,9 @@ class QueryService:
             ).all()
             lows = dict(
                 session.execute(
-                    select(Listing.product_id, func.min(PriceHistory.price))
+                    select(Listing.product_id, func.min(DEAL))
                     .join(PriceHistory)
-                    .where(PriceHistory.currency == "EUR")
+                    .where(*CONFIRMED_EUR)
                     .group_by(Listing.product_id)
                 ).all()
             )
@@ -83,32 +95,29 @@ class QueryService:
                 return None
             eligible = (
                 Listing.product_id == product_id,
-                PriceHistory.currency == "EUR",
+                *CONFIRMED_EUR,
                 PriceHistory.price.is_not(None),
             )
             low, high = session.execute(
-                select(func.min(PriceHistory.price), func.max(PriceHistory.price))
-                .join(Listing)
-                .where(*eligible)
+                select(func.min(DEAL), func.max(DEAL)).join(Listing).where(*eligible)
             ).one()
             first = session.scalar(
-                select(PriceHistory.price)
+                select(DEAL)
                 .join(Listing)
                 .where(*eligible)
                 .order_by(PriceHistory.timestamp)
                 .limit(1)
             )
             result = summary(product, low)
+            result["listing_urls"] = {x.id: x.url for x in product.listings}
             low_time = session.scalar(
-                select(func.max(PriceHistory.timestamp))
-                .join(Listing)
-                .where(*eligible, PriceHistory.price == low)
+                select(func.max(PriceHistory.timestamp)).join(Listing).where(*eligible, DEAL == low)
             )
             result.update(
                 high=high,
                 first=first,
                 days_since_low=(now() - low_time).days if low_time else None,
-                difference=((result["best"].current_price / low - 1) * 100)
+                difference=((result["best"].deal_price / low - 1) * 100)
                 if low and result["best"]
                 else None,
                 events=session.scalars(
@@ -143,7 +152,9 @@ class QueryService:
                         "data": [
                             {
                                 "x": h.timestamp.isoformat() + "Z",
-                                "y": float(h.price) if h.price is not None else None,
+                                "y": float(deal)
+                                if (deal := lower_price(h.price, h.promo_price)) is not None
+                                else None,
                             }
                             for h in sampled
                         ],

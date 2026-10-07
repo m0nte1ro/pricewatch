@@ -35,7 +35,7 @@ async def test_real_scheduler_writes_history_and_alerts(db, candidate, tmp_path)
         snapshot.observed_at = now()
         return [snapshot]
 
-    runtime.registry.adapters["worten"] = SimpleNamespace(fetch_listing=fetch)
+    runtime.registry.adapters["worten"] = SimpleNamespace(fetch_listing=fetch, searchable=True)
     runtime.start()
     try:
         runtime.scheduler.modify_job("price-checks", next_run_time=now())

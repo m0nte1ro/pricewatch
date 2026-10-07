@@ -13,9 +13,20 @@ document.addEventListener('DOMContentLoaded', () => {
     form.addEventListener('submit', () => {
       const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
-      button.textContent = 'Starting discovery…';
+      button.textContent = form.dataset.busy || 'Starting discovery…';
     });
   });
+});
+// Delegated so chips inside HTMX-swapped content work too.
+document.addEventListener('click', e => {
+  const chip = e.target.closest('[data-fill]');
+  if (!chip) return;
+  chip.closest('form').querySelector('input[name="price"]').value = chip.dataset.fill;
+});
+// Destructive forms ask first; without JavaScript they submit directly.
+document.addEventListener('submit', event => {
+  const message = event.target.dataset?.confirm;
+  if (message && !window.confirm(message)) event.preventDefault();
 });
 document.addEventListener('htmx:responseError', event => {
   const target = event.detail.target;

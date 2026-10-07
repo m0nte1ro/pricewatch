@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 
 from app.models import DiscoveryDraft, Product
+from app.retailers.generic import GenericAdapter
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import Candidate, Condition, Identity
 from app.services.listings import add_candidates
@@ -157,6 +158,38 @@ class DiscoveryService:
             }
             draft.status = "ready"
         log.info("discovery_complete", extra={"count": len(candidates)})
+
+    async def teach(
+        self, draft_id: str, index: int, price: Decimal, availability: str | None
+    ) -> None:
+        with self.db.session() as session:
+            draft = session.get(DiscoveryDraft, draft_id)
+            if draft is None:
+                raise ValueError("Discovery not found")
+            if draft.status != "ready":
+                raise ValueError("Discovery is not ready")
+            if not 0 <= index < len(draft.results["candidates"]):
+                raise ValueError("Invalid listing selection")
+            url = draft.results["candidates"][index]["listing"]["url"]
+        adapter = self.registry.for_url(url)
+        if not isinstance(adapter, GenericAdapter):
+            raise ValueError("Only generic stores can be taught")
+        html = await adapter.fetcher.get(url, adapter.name, adapter.hosts)
+        snapshot = adapter.learn(html, url, price, availability)
+        with self.db.session() as session:
+            draft = session.get(DiscoveryDraft, draft_id)
+            identity = Identity.model_validate(draft.results["identity"])
+            candidates = list(draft.results["candidates"])
+            candidates[index] = {
+                **candidates[index],
+                "listing": snapshot.model_dump(mode="json"),
+                "match": match_identity(identity, snapshot.identity, snapshot.condition).model_dump(
+                    mode="json"
+                ),
+            }
+            # A new dict: the JSON column does not track changes made inside the old one.
+            draft.results = {**draft.results, "candidates": candidates}
+        log.info("store_rule_taught", extra={"retailer": adapter.name})
 
     def confirm(self, draft_id: str, selected: list[int]) -> int:
         preferences = self.settings.get()

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from app.models import DiscoveryDraft
+from app.retailers.parsing import ScrapeError, money
 from app.schemas.domain import Condition
 from app.web.common import amount, get_product, protected, render, selection, validate_thresholds
 
@@ -72,3 +73,22 @@ async def confirm_discovery(request: Request, draft_id: str):
         raise HTTPException(422, str(exc)) from None
     runtime.spawn(runtime.notifications.deliver())
     return RedirectResponse(f"/products/{product_id}", 303)
+
+
+@router.post("/discoveries/{draft_id}/teach/{index}", dependencies=[Depends(protected)])
+async def teach_discovery(request: Request, draft_id: str, index: int):
+    runtime = request.app.state.runtime
+    form = await request.form()
+    price = money(form.get("price"))
+    if price is None:
+        raise HTTPException(422, "Enter the price as shown on the page, e.g. 1299,99")
+    availability = str(form.get("availability", ""))
+    if availability not in ("in_stock", "out_of_stock", "unknown"):
+        raise HTTPException(422, "Invalid availability")
+    try:
+        await runtime.discovery.teach(
+            draft_id, index, price, None if availability == "unknown" else availability
+        )
+    except (ValueError, ScrapeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return RedirectResponse(f"/discoveries/{draft_id}", 303)

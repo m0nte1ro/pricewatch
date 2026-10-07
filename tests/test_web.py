@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.models import DiscoveryDraft, Listing, PriceHistory, Product, RetailerState
 from app.schemas.domain import PriceRule, now
 from tests.conftest import GENERIC_PAGES, URLS
+from tests.test_generic import OLD_PRICE_FIRST_PAGE
 
 STORE_PAGE = """<html><head><title>TV TCL 85C7K | Store One</title></head><body><main class="product">
 <h1>TV TCL 85C7K MiniLED 85"</h1><span class="price-current">1.299,99 €</span><div class="stock">Em stock</div></main></body></html>"""
@@ -393,6 +394,49 @@ def test_redirect_to_a_non_public_host_is_never_followed(site):
     _, page = discover(client, name="TCL 85C7K", urls=["https://www.storeone.pt/p/r"], retailers=[])
     assert "Manual URL (www.storeone.pt): Retailer request failed" in page.text
     assert requests == ["https://www.storeone.pt/p/r"]
+
+
+def test_confirm_price_from_preview_teaches_store_rule(site):
+    client, runtime, _, _ = site
+    url = "https://www.storeone.pt/produto/tcl-85c7k"
+    GENERIC_PAGES[url] = OLD_PRICE_FIRST_PAGE
+    path, page = discover(client, name="TCL 85C7K", urls=[url], retailers=[])
+    assert "price unconfirmed" in page.text and "1.499,00" in page.text and "1.299,99" in page.text
+    assert (
+        client.post(
+            path + "/teach/0", data=form_data(client, price="5", availability="unknown")
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            path + "/teach/0", data=form_data(client, price="abc", availability="in_stock")
+        ).status_code
+        == 422
+    )
+    response = client.post(
+        path + "/teach/0",
+        data=form_data(client, price="1299,99", availability="in_stock"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    page = client.get(path).text
+    assert "price unconfirmed" not in page and "store rule" in page and "1299.99" in page
+    assert runtime.rules.get("storeone.pt").price_selector
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert (listing.current_price, listing.extraction_method, listing.availability) == (
+            Decimal("1299.99"),
+            "rule",
+            "in_stock",
+        )
+    assert (
+        client.post(
+            path + "/teach/0", data=form_data(client, price="1299,99", availability="in_stock")
+        ).status_code
+        == 422
+    )
 
 
 def test_settings_lists_and_forgets_store_rules(site):

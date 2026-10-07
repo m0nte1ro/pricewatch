@@ -17,6 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 });
+// Delegated so chips inside HTMX-swapped content work too.
+document.addEventListener('click', e => {
+  const chip = e.target.closest('[data-fill]');
+  if (!chip) return;
+  chip.closest('form').querySelector('input[name="price"]').value = chip.dataset.fill;
+});
 document.addEventListener('htmx:responseError', event => {
   const target = event.detail.target;
   if (target) target.textContent = 'Request failed. Reload the page and try again.';

@@ -10,7 +10,7 @@ from app.retailers.generic import GenericAdapter
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import Candidate, Identity, Preferences, Snapshot, now
 from app.services.alerts import evaluate
-from app.services.matching import identify, match_identity, normalize
+from app.services.matching import deduplicate, identify, match_identity, normalize
 
 log = logging.getLogger(__name__)
 
@@ -49,15 +49,7 @@ def verify_offer(listing: Listing, snapshots: list[Snapshot]) -> tuple[Snapshot 
 
     The listing must have its product loaded.
     """
-    product = listing.product
-    identity = Identity(
-        name=product.canonical_name,
-        brand=product.brand,
-        model=product.model,
-        size=product.size,
-        category=product.category,
-        identifiers=product.specifications,
-    )
+    identity = product_identity(listing.product)
     # A pasted link saved despite naming another model is checked against that model,
     # the one the owner accepted, so only a further change is flagged.
     pasted = identify(listing.title)
@@ -114,6 +106,48 @@ async def confirm_listing_price(
         interval = effective_interval(row, preferences)
         row.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
     log.info("store_rule_taught", extra={"retailer": adapter.name, "listing_id": listing.id})
+
+
+def product_identity(product: Product) -> Identity:
+    return Identity(
+        name=product.canonical_name,
+        brand=product.brand,
+        model=product.model,
+        size=product.size,
+        category=product.category,
+        identifiers=product.specifications,
+    )
+
+
+async def add_link(db, registry, product_id: int, url: str, preferences: Preferences) -> int:
+    """Fetch one pasted link and save it on an existing product; returns listings added.
+
+    The owner chose both the product and the link, so there is no discovery step or store
+    search: the page is read once and saved (a conflicting model is kept, as when pasted).
+    """
+    adapter = registry.for_url(url)
+    registry.fetcher.retry_now([adapter.name])  # a user action tries a paused store once
+    snapshots = await adapter.fetch_listing(adapter.normalize_url(url))
+    with db.session() as session:
+        product = session.get(Product, product_id)
+        if product is None:
+            raise ValueError("Product not found")
+        if product.archived:
+            raise ValueError("Restore the archived product before adding links")
+        identity = product_identity(product)
+        candidates = deduplicate(
+            [
+                Candidate(
+                    listing=snapshot,
+                    sources=["manual"],
+                    match=match_identity(identity, snapshot.identity, snapshot.condition),
+                )
+                for snapshot in snapshots
+            ]
+        )
+        added = add_candidates(session, product, candidates, preferences)
+    log.info("link_added", extra={"product_id": product_id, "retailer": adapter.name})
+    return added
 
 
 def add_candidates(

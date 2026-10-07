@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
     form.addEventListener('submit', () => {
       const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
-      button.textContent = 'Starting discovery…';
+      button.textContent = form.dataset.busy || 'Starting discovery…';
     });
   });
 });

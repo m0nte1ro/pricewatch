@@ -103,6 +103,7 @@ class QueryService:
                 .limit(1)
             )
             result = summary(product, low)
+            result["listing_urls"] = {x.id: x.url for x in product.listings}
             low_time = session.scalar(
                 select(func.max(PriceHistory.timestamp))
                 .join(Listing)

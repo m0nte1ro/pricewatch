@@ -1,5 +1,3 @@
-from urllib.parse import urlsplit
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
@@ -8,6 +6,7 @@ from app.retailers.parsing import ScrapeError
 from app.web.common import (
     amount,
     confirmed_price,
+    full_https,
     get_product,
     protected,
     render,
@@ -16,14 +15,6 @@ from app.web.common import (
 )
 
 router = APIRouter()
-
-
-def full_https(url: str) -> bool:
-    try:
-        parts = urlsplit(url)
-    except ValueError:  # e.g. "https://www.[::1]/p"
-        return False
-    return parts.scheme == "https" and bool(parts.hostname)
 
 
 @router.post("/discoveries", dependencies=[Depends(protected)])

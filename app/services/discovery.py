@@ -20,6 +20,9 @@ class DiscoveryService:
     def __init__(self, db, registry, settings):
         self.db, self.registry, self.settings = db, registry, settings
         self.capacity = asyncio.Semaphore(2)
+        # Rate-limited stores can make a discovery slow, but it must end so the page and the
+        # second discovery slot are never held forever.
+        self.timeout = 300
 
     def create(self, payload: dict, product_id: int | None = None) -> str:
         draft_id = str(uuid.uuid4())
@@ -30,7 +33,14 @@ class DiscoveryService:
     async def run(self, draft_id: str):
         async with self.capacity:
             try:
-                await self._discover(draft_id)
+                await asyncio.wait_for(self._discover(draft_id), self.timeout)
+            except TimeoutError:
+                log.warning("discovery_timed_out")
+                self._fail(
+                    draft_id,
+                    f"Discovery took longer than {self.timeout // 60} minutes and was stopped. "
+                    "A store may be rate limiting requests: try again with fewer stores selected.",
+                )
             except asyncio.CancelledError:
                 self._fail(draft_id, "Discovery interrupted by shutdown. Please retry.")
                 raise

@@ -7,10 +7,11 @@ from sqlalchemy.orm import joinedload
 from app.models import Listing, Product
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import now
-from app.services.listings import confirm_listing_price, verify_offer
+from app.services.listings import add_link, confirm_listing_price, verify_offer
 from app.web.common import (
     amount,
     confirmed_price,
+    full_https,
     get_product,
     protected,
     render,
@@ -41,10 +42,14 @@ async def new_product(request: Request, product_id: int | None = None):
 
 
 @router.get("/products/{product_id}")
-async def product_detail(request: Request, product_id: int):
+async def product_detail(request: Request, product_id: int, added: int | None = None):
     runtime = request.app.state.runtime
     return render(
-        request, "product.html", **get_product(runtime, product_id), monitor=runtime.monitor
+        request,
+        "product.html",
+        **get_product(runtime, product_id),
+        monitor=runtime.monitor,
+        added=added,
     )
 
 
@@ -83,6 +88,24 @@ async def archive_product(request: Request, product_id: int):
         product = session.get(Product, product_id)
         product.archived = not product.archived
     return RedirectResponse("/", 303)
+
+
+@router.post("/products/{product_id}/links", dependencies=[Depends(protected)])
+async def add_product_link(request: Request, product_id: int):
+    runtime = request.app.state.runtime
+    get_product(runtime, product_id)
+    form = await request.form()
+    url = str(form.get("url", "")).strip()
+    if len(url) > 2048 or not full_https(url):
+        raise HTTPException(422, "Product links must be full https:// URLs")
+    try:
+        added = await add_link(
+            runtime.db, runtime.registry, product_id, url, runtime.settings.get()
+        )
+    except (ScrapeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    runtime.spawn(runtime.notifications.deliver())
+    return RedirectResponse(f"/products/{product_id}?added={added}", 303)
 
 
 @router.post("/listings/{listing_id}/toggle", dependencies=[Depends(protected)])

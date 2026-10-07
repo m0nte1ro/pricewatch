@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.models import Alert, RetailerState
+from app.models import Alert, Listing, RetailerState
 from app.schemas.domain import Preferences
 from app.web.common import protected, render, selection
 
@@ -83,7 +83,18 @@ async def alerts_page(request: Request, page: int = 1):
         alerts = session.scalars(
             select(Alert).order_by(Alert.id.desc()).offset((page - 1) * 50).limit(51)
         ).all()
-    return render(request, "alerts.html", alerts=alerts[:50], page=page, has_more=len(alerts) > 50)
+        ids = {a.listing_id for a in alerts if a.listing_id}
+        listing_urls = dict(
+            session.execute(select(Listing.id, Listing.url).where(Listing.id.in_(ids))).all()
+        )
+    return render(
+        request,
+        "alerts.html",
+        alerts=alerts[:50],
+        page=page,
+        has_more=len(alerts) > 50,
+        listing_urls=listing_urls,
+    )
 
 
 @router.post("/alerts/{alert_id}/read", dependencies=[Depends(protected)])

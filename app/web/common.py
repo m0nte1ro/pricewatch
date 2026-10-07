@@ -27,6 +27,14 @@ def render(request: Request, template: str, **context):
     )
 
 
+def full_https(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:  # e.g. "https://www.[::1]/p"
+        return False
+    return parts.scheme == "https" and bool(parts.hostname)
+
+
 async def protected(request: Request):
     form = await request.form(max_fields=200)
     token = str(form.get("csrf", ""))

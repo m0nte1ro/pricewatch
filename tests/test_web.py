@@ -777,3 +777,128 @@ def test_link_the_url_parser_refuses_is_rejected_at_the_form(site):
     assert response.status_code == 422
     assert "Product links must be full https:// URLs" in response.text
     assert requests == []
+
+
+STORE_URL = "https://www.storeone.pt/produto/tcl-85c7k"
+
+
+def saved_product(client):
+    path, _ = discover(client, urls=[URLS["worten"]], retailers=[])
+    response = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    )
+    return response.headers["location"]
+
+
+def test_add_link_to_an_existing_product_saves_it_directly(site):
+    client, runtime, _, _ = site
+    product_path = saved_product(client)
+    GENERIC_PAGES[STORE_URL] = STORE_PAGE
+    with runtime.db.session() as session:
+        drafts = session.scalar(select(func.count()).select_from(DiscoveryDraft))
+    response = client.post(
+        product_path + "/links",
+        data=form_data(client, url=STORE_URL + "?utm_source=mail"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == product_path + "?added=1"
+    with runtime.db.session() as session:
+        # No discovery step: the link is fetched and saved in the request itself.
+        assert session.scalar(select(func.count()).select_from(DiscoveryDraft)) == drafts
+        listing = session.scalar(select(Listing).where(Listing.retailer == "storeone.pt"))
+        assert (listing.url, listing.current_price, listing.sources) == (
+            STORE_URL,
+            Decimal("1299.99"),
+            ["manual"],
+        )
+    page = client.get(product_path + "?added=1").text
+    assert "Link added" in page and "storeone.pt" in page
+    assert 'action="' + product_path + '/links"' in page
+
+
+def test_adding_a_link_twice_keeps_one_listing(site):
+    client, runtime, _, _ = site
+    product_path = saved_product(client)
+    GENERIC_PAGES[STORE_URL] = STORE_PAGE
+    client.post(product_path + "/links", data=form_data(client, url=STORE_URL))
+    response = client.post(
+        product_path + "/links",
+        data=form_data(client, url=STORE_URL + "#reviews"),
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == product_path + "?added=0"
+    assert "already on this product" in client.get(product_path + "?added=0").text
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 2
+
+
+@pytest.mark.parametrize(
+    "url,message",
+    [
+        ("https://www.storeone.pt/missing", "HTTP 404"),
+        ("https://192.168.1.10/produto/x", "Only public https:// store links can be monitored"),
+        ("http://www.storeone.pt/p", "Product links must be full https:// URLs"),
+    ],
+)
+def test_a_link_that_cannot_be_added_says_why(site, url, message):
+    client, runtime, _, _ = site
+    product_path = saved_product(client)
+    response = client.post(product_path + "/links", data=form_data(client, url=url))
+    assert response.status_code == 422 and message in response.text
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 1
+
+
+def test_archived_product_takes_no_links(site):
+    client, _, _, _ = site
+    product_path = saved_product(client)
+    client.post(product_path + "/archive", data=form_data(client))
+    GENERIC_PAGES[STORE_URL] = STORE_PAGE
+    response = client.post(product_path + "/links", data=form_data(client, url=STORE_URL))
+    assert response.status_code == 422 and "Restore" in response.text
+    assert 'placeholder="Paste a store link"' not in client.get(product_path).text
+
+
+def test_store_names_and_prices_link_to_the_listing(site):
+    client, runtime, _, _ = site
+    product_path = saved_product(client)
+    worten = f'href="{URLS["worten"]}"'
+    # Dashboard card: the best price and its store.
+    card = client.get("/").text.split('class="product-card"')[1]
+    assert card.count(worten) >= 2
+    # Product page: best price figure, plus the price cell in the listings table.
+    product = client.get(product_path).text
+    stats = product.split('class="stats"')[1].split("</div></div>")[0]
+    assert worten in stats
+    table = product.split("<tbody>")[1]
+    assert table.count(worten) >= 2
+    # Activity: each event about a listing links to it.
+    assert worten in client.get("/alerts").text
+    # Review screen: the price cell links to the listing too.
+    _, page = discover(client, urls=[URLS["worten"]], retailers=[])
+    row = page.text.split("<tbody>")[1].split("</tr>")[0]
+    assert row.count(worten) >= 2
+
+
+async def test_discovery_that_runs_too_long_is_stopped(site, monkeypatch):
+    _, runtime, _, _ = site
+    import asyncio
+
+    async def stuck(url, **kwargs):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(runtime.registry.adapters["worten"], "fetch_listing", stuck)
+    monkeypatch.setattr(runtime.discovery, "timeout", 0.05)
+    draft = runtime.discovery.create(payload(urls=[URLS["worten"]]) | {"retailers": []})
+    await runtime.discovery.run(draft)
+    with runtime.db.session() as session:
+        row = session.get(DiscoveryDraft, draft)
+        assert row.status == "failed"
+        assert "took longer than" in row.results["errors"][0]
+
+
+def test_queued_discovery_says_it_is_waiting(site):
+    client, runtime, _, _ = site
+    draft = runtime.discovery.create(payload())
+    assert "Waiting for another discovery to finish" in client.get(f"/discoveries/{draft}").text

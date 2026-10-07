@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-from app.schemas.domain import now
+from app.schemas.domain import lower_price, now
 
 
 class Product(Base):
@@ -63,6 +63,9 @@ class Listing(Base):
     retailer_product_id: Mapped[str | None] = mapped_column(String(150))
     title: Mapped[str] = mapped_column(String(500))
     current_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # A lower price offered with a public promo code; deal_price is what the owner would pay.
+    promo_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    promo_code: Mapped[str | None] = mapped_column(String(50))
     previous_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     original_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
@@ -83,6 +86,10 @@ class Listing(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     product: Mapped[Product] = relationship(back_populates="listings")
 
+    @property
+    def deal_price(self) -> Decimal | None:
+        return lower_price(self.current_price, self.promo_price)
+
 
 class PriceHistory(Base):
     __tablename__ = "price_history"
@@ -94,6 +101,7 @@ class PriceHistory(Base):
     availability: Mapped[str] = mapped_column(String(30))
     condition: Mapped[str] = mapped_column(String(30))
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
+    promo_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     method: Mapped[str] = mapped_column(
         String(20), default="structured", server_default="structured"
     )

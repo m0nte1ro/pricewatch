@@ -260,3 +260,30 @@ def test_unconfirmed_history_never_sets_the_low_high_or_first_price(db, candidat
     with db.session() as session:
         rows = session.scalars(select(PriceHistory.method).order_by(PriceHistory.timestamp))
         assert list(rows) == ["heuristic", "rule", "rule", "heuristic", "heuristic"]
+
+
+def test_promo_code_price_drives_alerts_best_price_and_history(db, candidate):
+    candidate.listing.price = Decimal("1199")
+    candidate.listing.promo_price = Decimal("789.00")
+    candidate.listing.promo_code = "TV20"
+    product_id = create_product(db, candidate)  # target 900, insane 800
+    assert events(db) == ["new_listing", "target_hit", "insane_deal"]
+    with db.session() as session:
+        messages = {a.event_type: a.message for a in session.scalars(select(Alert))}
+        assert "789.00 EUR with code TV20" in messages["insane_deal"]
+        listing = session.scalar(select(Listing))
+        assert (listing.current_price, listing.promo_price, listing.promo_code) == (
+            Decimal("1199"),
+            Decimal("789"),
+            "TV20",
+        )
+        assert session.scalar(select(PriceHistory)).promo_price == Decimal("789")
+        assert summary(session.get(Product, product_id))["best"].deal_price == Decimal("789")
+    # The code expires: back to the shelf price, which is above both thresholds.
+    update(db, candidate.listing.model_copy(update={"promo_price": None, "promo_code": None}))
+    assert events(db)[-1] == "insane_deal"
+    # A new code brings the deal back: a drop and a fresh threshold crossing.
+    update(db, candidate.listing.model_copy())
+    assert events(db)[-3:] == ["price_dropped", "target_hit", "insane_deal"]
+    detail = QueryService(db).detail(product_id)
+    assert (detail["low"], detail["high"]) == (Decimal("789"), Decimal("1199"))

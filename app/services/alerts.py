@@ -17,10 +17,13 @@ def emit(
     *,
     push: bool = True,
     unconfirmed: bool = False,
+    code: str | None = None,
 ):
     prices = (
         f"{old if old is not None else '—'} → {new if new is not None else '—'} {listing.currency}"
     )
+    if code:
+        prices += f" with code {code}"
     if unconfirmed:
         prices += " (price unconfirmed)"
     message = f"{event.replace('_', ' ').upper()} · {product.canonical_name} · {listing.retailer} · {listing.condition} · {prices}"
@@ -48,7 +51,9 @@ def emit(
 def evaluate(
     session, product: Product, listing: Listing, snapshot: Snapshot, *, initial: bool = False
 ):
-    old, new = listing.current_price, snapshot.price
+    # Compare what the owner would pay, so a promo-code price counts like any other drop.
+    old, new = listing.deal_price, snapshot.deal_price
+    code = snapshot.promo_code if new is not None and new == snapshot.promo_price else None
     # Stock events fire on heuristic readings too; their price must not read as a known one.
     unconfirmed = snapshot.method == "heuristic"
     if initial:
@@ -58,12 +63,40 @@ def evaluate(
             if snapshot.condition in (Condition.NEW, Condition.UNKNOWN)
             else "outlet_listing"
         )
-        emit(session, product, listing, event, None, new, push=False, unconfirmed=unconfirmed)
+        emit(
+            session,
+            product,
+            listing,
+            event,
+            None,
+            new,
+            push=False,
+            unconfirmed=unconfirmed,
+            code=code,
+        )
     elif listing.availability != snapshot.availability:
         if snapshot.availability == "in_stock":
-            emit(session, product, listing, "became_available", old, new, unconfirmed=unconfirmed)
+            emit(
+                session,
+                product,
+                listing,
+                "became_available",
+                old,
+                new,
+                unconfirmed=unconfirmed,
+                code=code,
+            )
         elif snapshot.availability == "out_of_stock":
-            emit(session, product, listing, "became_unavailable", old, new, unconfirmed=unconfirmed)
+            emit(
+                session,
+                product,
+                listing,
+                "became_unavailable",
+                old,
+                new,
+                unconfirmed=unconfirmed,
+                code=code,
+            )
     eligible = (
         snapshot.availability == "in_stock"
         and snapshot.currency == "EUR"
@@ -78,7 +111,7 @@ def evaluate(
         and listing.extraction_method != "heuristic"
     )
     if previously_eligible and old is not None and new < old:
-        emit(session, product, listing, "price_dropped", old, new)
+        emit(session, product, listing, "price_dropped", old, new, code=code)
     for threshold, event in (
         (product.target_price, "target_hit"),
         (product.insane_deal_price, "insane_deal"),
@@ -88,4 +121,4 @@ def evaluate(
             and new <= threshold
             and (not previously_eligible or old is None or old > threshold)
         ):
-            emit(session, product, listing, event, old, new)
+            emit(session, product, listing, event, old, new, code=code)

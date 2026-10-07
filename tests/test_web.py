@@ -965,3 +965,17 @@ def test_removing_a_listing_deletes_it_and_its_history(site):
     table = client.get(product_path).text.split("<tbody>")[1].split("</tbody>")[0]
     assert "storeone.pt" not in table
     assert client.post(f"/listings/{listing_id}/delete", data=form_data(client)).status_code == 404
+
+
+def test_promo_code_price_is_shown_with_its_code(site):
+    client, runtime, _, _ = site
+    product_path = saved_product(client)
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        listing.promo_price, listing.promo_code = Decimal("999.00"), "TV20"
+    card = client.get("/").text.split('class="product-card"')[1]
+    assert "€999.00" in card and "with code TV20" in card
+    product = client.get(product_path).text
+    assert "with code TV20" in product.split('class="stats"')[1].split("</div></div>")[0]
+    table = product.split("<tbody>")[1]
+    assert "€1,199.00" in table and "€999.00 with code TV20" in table

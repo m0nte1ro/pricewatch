@@ -28,12 +28,14 @@ def record_snapshot(
             condition=str(snapshot.condition),
             currency=snapshot.currency,
             method=snapshot.method,
+            promo_price=snapshot.promo_price,
         )
     )
     if listing.current_price != snapshot.price:
         listing.previous_price = listing.current_price
         log.info("price_changed", extra={"listing_id": listing.id})
     listing.current_price = snapshot.price
+    listing.promo_price, listing.promo_code = snapshot.promo_price, snapshot.promo_code
     listing.original_price = snapshot.original_price
     listing.currency = snapshot.currency
     listing.availability = snapshot.availability

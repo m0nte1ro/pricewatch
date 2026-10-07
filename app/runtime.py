@@ -23,7 +23,7 @@ class Runtime:
     def __init__(self, config, db):
         self.config, self.db = config, db
         self.settings = SettingsService(db)
-        self.fetcher = Fetcher(db, self.settings.get)
+        self.fetcher = Fetcher(db, self.settings.get, profile_dir=config.data_dir / "browser")
         self.rules = RuleService(db)
         self.registry = Registry(self.fetcher, self.rules)
         self.notifications = NotificationService(db, self.settings)

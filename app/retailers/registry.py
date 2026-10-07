@@ -5,6 +5,7 @@ from app.retailers.base import RetailerAdapter
 from app.retailers.darty import DartyAdapter
 from app.retailers.fnac import FnacAdapter
 from app.retailers.generic import PUBLIC_ONLY, GenericAdapter, public_host, store_key
+from app.retailers.kuantokusta import KuantoKustaAdapter
 from app.retailers.parsing import ScrapeError
 from app.retailers.radiopopular import RadioPopularAdapter
 from app.retailers.worten import WortenAdapter
@@ -22,6 +23,7 @@ class Registry:
                 DartyAdapter,
                 RadioPopularAdapter,
                 AmazonESAdapter,
+                KuantoKustaAdapter,
             )
         }
         self.generic: dict[str, GenericAdapter] = {}

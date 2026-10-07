@@ -66,6 +66,7 @@ class Listing(Base):
     # A lower price offered with a public promo code; deal_price is what the owner would pay.
     promo_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     promo_code: Mapped[str | None] = mapped_column(String(50))
+    offered_by: Mapped[str | None] = mapped_column(String(150))
     previous_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     original_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), default="EUR")

@@ -1033,3 +1033,31 @@ def test_add_link_keeps_a_link_the_store_refuses(site):
     with runtime.db.session() as session:
         listing = session.scalar(select(Listing).where(Listing.retailer == "darty"))
         assert listing.extraction_method == "unread"
+
+
+def test_kuantokusta_link_shows_where_the_lowest_price_is(site):
+    client, runtime, _, _ = site
+    from tests.conftest import FIXTURES
+
+    async def browse(url, retailer, hosts):
+        return (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+
+    runtime.fetcher.browse = browse
+    product_path = saved_product(client)
+    location = client.post(
+        product_path + "/links",
+        data=form_data(
+            client,
+            url="https://www.kuantokusta.pt/p/12121920/tcl-85-85c7l-sqd-miniled-smart-google-tv-4k",
+        ),
+        follow_redirects=False,
+    ).headers["location"]
+    page = client.get(location).text
+    assert "Added KuantoKusta: €1,748.18" in page
+    assert "Hipermercado · free shipping" in page.split("<tbody>")[1]
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing).where(Listing.retailer == "kuantokusta"))
+        assert (listing.current_price, listing.offered_by) == (
+            Decimal("1748.18"),
+            "Hipermercado · free shipping",
+        )

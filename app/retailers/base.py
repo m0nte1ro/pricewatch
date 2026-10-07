@@ -25,6 +25,8 @@ class RetailerAdapter:
     # Used only when the page shows no condition evidence. First-party stores selling only new
     # stock may set NEW; marketplaces must stay UNKNOWN so alerts never assume new.
     default_condition = Condition.UNKNOWN
+    # Stores without a usable search (link-only) are left out of store search and its switches.
+    searchable = True
     # Seconds between requests to this store; None uses the fetcher default (2 s).
     request_interval: float | None = None
 

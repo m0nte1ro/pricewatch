@@ -349,3 +349,61 @@ def test_radio_popular_stock_comes_from_the_product_header(registry, button, exp
     )
     listing = registry.adapters["radiopopular"].parse(html, RADIO_URL)[0]
     assert listing.availability == expected
+
+
+KK_URL = "https://www.kuantokusta.pt/p/12121920/tcl-85-85c7l-sqd-miniled-smart-google-tv-4k"
+
+
+def test_kuantokusta_keeps_the_lowest_price_including_shipping(registry):
+    # Chipman has the lowest sticker price (1708.95) but 124.99 shipping; Hipermercado's
+    # 1748.18 with free shipping is what you would pay.
+    page = (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+    listing = registry.adapters["kuantokusta"].parse(page, KK_URL)[0]
+    assert listing.price == Decimal("1748.18")
+    assert listing.offered_by == "Hipermercado · free shipping"
+    assert (listing.availability, listing.condition) == ("in_stock", "new")
+    assert listing.identity.model == "85C7L"
+    assert listing.identity.identifiers["gtin"] == "5901292529925"
+    assert listing.retailer_product_id == "12121920"
+
+
+def test_kuantokusta_names_paid_shipping():
+    adapter = Registry(Fetcher(None, None)).adapters["kuantokusta"]
+    page = (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+    page = page.replace(
+        '"Hipermercado", "storeSlug": "hipermercado", "price": 1748.18',
+        '"Hipermercado", "storeSlug": "hipermercado", "price": 1799.0',
+    )
+    listing = adapter.parse(page, KK_URL)[0]
+    assert (listing.price, listing.offered_by) == (Decimal("1748.23"), "Tek4Life · €28.33 shipping")
+
+
+def test_kuantokusta_without_offers_is_out_of_stock(registry):
+    page = re.sub(
+        r'"offers": \[.*\]', '"offers": []', (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+    )
+    listing = registry.adapters["kuantokusta"].parse(page, KK_URL)[0]
+    assert (listing.price, listing.availability, listing.offered_by) == (None, "out_of_stock", None)
+
+
+def test_kuantokusta_urls_drop_search_tracking(registry):
+    adapter = registry.adapters["kuantokusta"]
+    assert adapter.normalize_url(KK_URL + "?queryId=527e58ffae478faa4ac00bee969daa90") == KK_URL
+    assert registry.for_url("https://kuantokusta.pt/p/12121920/x").name == "kuantokusta"
+
+
+async def test_kuantokusta_is_read_through_the_browser():
+    pages = []
+
+    class BrowserOnly(Fetcher):
+        async def get(self, *args, **kwargs):  # plain requests get "Access Denied"
+            raise AssertionError("KuantoKusta must not be fetched with plain HTTP")
+
+        async def browse(self, url, retailer, hosts):
+            pages.append((url, retailer))
+            return (FIXTURES / "kuantokusta_85c7l_live.html").read_text()
+
+    adapter = Registry(BrowserOnly(None, None)).adapters["kuantokusta"]
+    listing = (await adapter.fetch_listing(KK_URL + "?queryId=x"))[0]
+    assert pages == [(KK_URL, "kuantokusta")]
+    assert listing.price == Decimal("1748.18")

@@ -73,6 +73,7 @@ def record_snapshot(
         log.info("price_changed", extra={"listing_id": listing.id})
     listing.current_price = snapshot.price
     listing.promo_price, listing.promo_code = snapshot.promo_price, snapshot.promo_code
+    listing.offered_by = snapshot.offered_by
     listing.original_price = snapshot.original_price
     listing.currency = snapshot.currency
     listing.availability = snapshot.availability

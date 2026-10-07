@@ -32,8 +32,12 @@ class MonitoringService:
             return
         async with self.lock:
             prefs = self.settings.get()
-            # Generic stores have no switch in Settings, so only known stores can be disabled.
-            disabled = [n for n in self.registry.adapters if n not in prefs.enabled_retailers]
+            # Generic and link-only stores have no switch in Settings, so they are never disabled.
+            disabled = [
+                name
+                for name, adapter in self.registry.adapters.items()
+                if adapter.searchable and name not in prefs.enabled_retailers
+            ]
             with self.db.session() as session:
                 query = (
                     select(Listing.id, Listing.retailer)

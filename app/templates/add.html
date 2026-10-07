@@ -10,7 +10,7 @@
 <section class="panel"><h2><span class="step">03</span> Price goals</h2><div class="two-cols"><label>Target price (€)<input type="number" name="target_price" min="0.01" step="0.01" placeholder="900.00" value="{{ product.target_price or '' if product else '' }}"></label><label>Insane deal (€)<input type="number" name="insane_deal_price" min="0.01" step="0.01" placeholder="800.00" value="{{ product.insane_deal_price or '' if product else '' }}"></label></div>{% if product %}<p class="help">Existing product thresholds are preserved. Edit them on the product page.</p>{% endif %}</section>
 </div>
 <div>
-<details class="panel"><summary>Also search known stores (optional)</summary><p class="help">Searching sends several requests per store. Stores that throttle may pause for a while; your links are read regardless.</p>{% for name, adapter in retailers.items() %}<label class="check-row"><input type="checkbox" name="retailers" value="{{ name }}"><span>{{ adapter.label }}<small>{{ adapter.status }}</small></span></label>{% endfor %}</details>
+<details class="panel"><summary>Also search known stores (optional)</summary><p class="help">Searching sends several requests per store. Stores that throttle may pause for a while; your links are read regardless.</p>{% for name, adapter in retailers.items() if adapter.searchable %}<label class="check-row"><input type="checkbox" name="retailers" value="{{ name }}"><span>{{ adapter.label }}<small>{{ adapter.status }}</small></span></label>{% endfor %}</details>
 <button class="primary full" type="submit">Review listings →</button><p class="help">Review the detected product and matching listings before saving. Discovery may take a few minutes.</p></div>
 </form>
 {% endblock %}

@@ -38,8 +38,12 @@ def retry_after(value: str | None) -> float | None:
 
 
 class Fetcher:
-    def __init__(self, db, get_preferences, *, transport=None, min_delay: float = 2):
+    def __init__(
+        self, db, get_preferences, *, transport=None, min_delay: float = 2, profile_dir=None
+    ):
         self.db = db
+        # Cookies the browser-read stores hand out are kept here between visits.
+        self.profile_dir = profile_dir
         self.get_preferences = get_preferences
         self.transport = transport
         self.min_delay = min_delay
@@ -75,6 +79,12 @@ class Fetcher:
                 row.blocked_until = None
                 log.info("retailer_cooldown_lifted", extra={"retailer": row.name})
 
+    def check_cooldown(self, retailer: str):
+        with self.db.session() as session:
+            state = session.get(RetailerState, retailer)
+            if state and state.blocked_until and state.blocked_until > now():
+                raise BlockedError("Retailer temporarily unavailable; retrying after cooldown")
+
     @staticmethod
     def validate_url(url: str, hosts: tuple[str, ...]):
         parsed = urlsplit(url)
@@ -93,10 +103,7 @@ class Fetcher:
         self.validate_url(url, hosts)
         prefs: Preferences = self.get_preferences()
         async with self.locks.setdefault(retailer, asyncio.Lock()):
-            with self.db.session() as session:
-                state = session.get(RetailerState, retailer)
-                if state and state.blocked_until and state.blocked_until > now():
-                    raise BlockedError("Retailer temporarily unavailable; retrying after cooldown")
+            self.check_cooldown(retailer)
             # Some stores reject HTTP/1.1 from a browser user agent; negotiate HTTP/2 like one.
             async with httpx.AsyncClient(
                 timeout=prefs.request_timeout,
@@ -257,3 +264,96 @@ class Fetcher:
                 raise ScrapeError(
                     "Browser rendering failed; verify Chromium installation"
                 ) from None
+
+    async def browse(self, url: str, retailer: str, hosts: tuple[str, ...]) -> str:
+        """Read a page with a real Chromium, for stores that refuse plain requests.
+
+        It visits like a regular browser: the site's own scripts run and the cookies it sets
+        are kept between visits. It answers no challenge; a page that still shows one is a
+        block, cooled down like a 403.
+        """
+        self.validate_url(url, hosts)
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise ScrapeError(
+                "This store is read with a browser: install Playwright and Chromium"
+            ) from None
+        async with self.locks.setdefault(retailer, asyncio.Lock()):
+            self.check_cooldown(retailer)
+            async with self.browser_lock:
+                try:
+                    async with async_playwright() as playwright:
+                        html = await self._browse(playwright, url, retailer)
+                except BlockedError as exc:
+                    self.state(retailer, str(exc), cooldown=exc.cooldown)
+                    raise
+                except Exception:
+                    log.warning("browser_read_failed", extra={"retailer": retailer})
+                    raise ScrapeError(
+                        "Browser read failed; verify the Chromium installation"
+                    ) from None
+        self.state(retailer)
+        log.info("retailer_request", extra={"retailer": retailer, "status": 200})
+        return html
+
+    async def _browse(self, playwright, url: str, retailer: str) -> str:
+        from app.retailers.generic import public_host
+
+        prefs = self.get_preferences()
+        # The full Chromium in its current headless mode, without the automation flag: the
+        # lighter headless shell and that flag are what these stores turn away.
+        browser = await playwright.chromium.launch(
+            channel="chromium",
+            headless=True,
+            proxy={"server": prefs.proxy} if prefs.proxy else None,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        try:
+            major = browser.version.split(".")[0]
+            state = self.profile_dir / f"{retailer}.json" if self.profile_dir else None
+            context = await browser.new_context(
+                user_agent=f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36",
+                locale="pt-PT",
+                timezone_id="Europe/Lisbon",
+                viewport={"width": 1366, "height": 800},
+                storage_state=str(state) if state and state.exists() else None,
+            )
+            page = await context.new_page()
+
+            async def guard(route):
+                request = route.request
+                host = urlsplit(request.url).hostname or ""
+                if request.resource_type in ("image", "media", "font") or not public_host(host):
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", guard)
+            response = await page.goto(
+                url, wait_until="domcontentloaded", timeout=prefs.request_timeout * 1000
+            )
+            if response and response.status in (403, 429):
+                raise BlockedError(
+                    f"Retailer refused the browser (HTTP {response.status}); cooling down for one hour"
+                )
+            html = await page.content()
+            head = html[:20000].lower()
+            if any(
+                x in head
+                for x in (
+                    "cf-chl-",
+                    "captcha-delivery.com",
+                    "verify you are human",
+                    "access denied",
+                )
+            ):
+                raise BlockedError(
+                    "Retailer kept the browser at a human check; no bypass attempted"
+                )
+            if state:
+                state.parent.mkdir(parents=True, exist_ok=True)
+                await context.storage_state(path=str(state))
+            return html
+        finally:
+            await browser.close()

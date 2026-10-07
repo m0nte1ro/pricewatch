@@ -18,12 +18,15 @@ def emit(
     push: bool = True,
     unconfirmed: bool = False,
     code: str | None = None,
+    via: str | None = None,
 ):
     prices = (
         f"{old if old is not None else '—'} → {new if new is not None else '—'} {listing.currency}"
     )
     if code:
         prices += f" with code {code}"
+    if via:
+        prices += f" via {via}"
     if unconfirmed:
         prices += " (price unconfirmed)"
     message = f"{event.replace('_', ' ').upper()} · {product.canonical_name} · {listing.retailer} · {listing.condition} · {prices}"
@@ -73,6 +76,7 @@ def evaluate(
             push=False,
             unconfirmed=unconfirmed,
             code=code,
+            via=snapshot.offered_by,
         )
     elif listing.availability != snapshot.availability:
         if snapshot.availability == "in_stock":
@@ -85,6 +89,7 @@ def evaluate(
                 new,
                 unconfirmed=unconfirmed,
                 code=code,
+                via=snapshot.offered_by,
             )
         elif snapshot.availability == "out_of_stock":
             emit(
@@ -96,6 +101,7 @@ def evaluate(
                 new,
                 unconfirmed=unconfirmed,
                 code=code,
+                via=snapshot.offered_by,
             )
     eligible = (
         snapshot.availability == "in_stock"
@@ -111,7 +117,9 @@ def evaluate(
         and listing.extraction_method != "heuristic"
     )
     if previously_eligible and old is not None and new < old:
-        emit(session, product, listing, "price_dropped", old, new, code=code)
+        emit(
+            session, product, listing, "price_dropped", old, new, code=code, via=snapshot.offered_by
+        )
     for threshold, event in (
         (product.target_price, "target_hit"),
         (product.insane_deal_price, "insane_deal"),
@@ -121,4 +129,4 @@ def evaluate(
             and new <= threshold
             and (not previously_eligible or old is None or old > threshold)
         ):
-            emit(session, product, listing, event, old, new, code=code)
+            emit(session, product, listing, event, old, new, code=code, via=snapshot.offered_by)

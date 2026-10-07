@@ -51,6 +51,12 @@ class Snapshot(BaseModel):
         return value.quantize(Decimal("0.01")) if value is not None else None
 
 
+class PriceCandidate(BaseModel):
+    selector: str
+    price: Decimal
+    text: str
+
+
 class Match(BaseModel):
     level: str
     score: float

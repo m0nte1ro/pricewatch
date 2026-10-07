@@ -39,6 +39,14 @@ def record_snapshot(
     listing.last_error = None
 
 
+def effective_interval(listing: Listing, preferences: Preferences | None) -> int:
+    if listing.check_interval_minutes is not None:
+        return listing.check_interval_minutes
+    if preferences is None:
+        return 60
+    return preferences.retailer_intervals.get(listing.retailer, preferences.polling_minutes)
+
+
 def add_candidates(
     session, product: Product, candidates: list[Candidate], preferences: Preferences | None = None
 ) -> int:
@@ -93,11 +101,7 @@ def add_candidates(
         session.add(listing)
         session.flush()
         record_snapshot(session, product, listing, snapshot, initial=True)
-        interval = (
-            preferences.retailer_intervals.get(snapshot.retailer, preferences.polling_minutes)
-            if preferences
-            else 60
-        )
+        interval = effective_interval(listing, preferences)
         listing.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
         added += 1
     return added

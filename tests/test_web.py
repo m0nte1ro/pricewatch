@@ -239,3 +239,30 @@ def test_unsupported_store_link_is_reported_without_discarding_the_others(site):
     assert '<details class="panel warnings" open>' in page.text
     assert page.text.count("discovered + manual") == 2
     assert not any("pcdiga" in r for r in requests)
+
+
+def test_listing_interval_override(site):
+    client, runtime, _, _ = site
+    path, _ = discover(client, urls=[URLS["worten"]], retailers=[])
+    product_path = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    with runtime.db.session() as session:
+        listing_id = session.scalar(select(Listing)).id
+    response = client.post(
+        f"/listings/{listing_id}/interval",
+        data=form_data(client, minutes="15"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        assert listing.check_interval_minutes == 15
+        assert listing.next_check_at <= now() + timedelta(minutes=16)
+    rejected = client.post(f"/listings/{listing_id}/interval", data=form_data(client, minutes="3"))
+    assert rejected.status_code == 422
+    assert "Interval must be between 5 and 10080 minutes" in rejected.text
+    client.post(f"/listings/{listing_id}/interval", data=form_data(client, minutes=""))
+    with runtime.db.session() as session:
+        assert session.get(Listing, listing_id).check_interval_minutes is None
+    assert 'name="minutes"' in client.get(product_path).text

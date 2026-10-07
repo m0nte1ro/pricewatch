@@ -4,8 +4,8 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 from app.models import Alert, Listing, PriceHistory, Product
-from app.schemas.domain import now
-from app.services.listings import add_candidates, record_snapshot
+from app.schemas.domain import Preferences, now
+from app.services.listings import add_candidates, effective_interval, record_snapshot
 from app.services.queries import QueryService, summary
 
 
@@ -161,3 +161,17 @@ def test_out_of_stock_deal_price_is_recorded_but_never_alerts(db, candidate):
         "target_hit",
         "insane_deal",
     ]
+
+
+def test_effective_interval_precedence(db, candidate):
+    create_product(db, candidate)
+    prefs = Preferences(polling_minutes=120, retailer_intervals={"worten": 30})
+    with db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert effective_interval(listing, prefs) == 30
+        listing.check_interval_minutes = 15
+        assert effective_interval(listing, prefs) == 15
+        listing.check_interval_minutes = None
+        prefs.retailer_intervals = {}
+        assert effective_interval(listing, prefs) == 120
+        assert effective_interval(listing, None) == 60

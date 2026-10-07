@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.models import Listing, Product
 from app.schemas.domain import Identity, now
-from app.services.listings import record_snapshot
+from app.services.listings import effective_interval, record_snapshot
 from app.services.matching import match_identity, normalize
 
 log = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class MonitoringService:
             row = session.get(Listing, listing_id)
             if not row.enabled or not row.product.enabled or row.product.archived:
                 return
-            interval = prefs.retailer_intervals.get(row.retailer, prefs.polling_minutes)
+            interval = effective_interval(row, prefs)
             row.last_checked_at = now()
             row.next_check_at = now() + timedelta(minutes=interval * random.uniform(0.95, 1.05))
             if error:

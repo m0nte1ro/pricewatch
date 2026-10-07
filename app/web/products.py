@@ -1,7 +1,10 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from app.models import Listing, Product
+from app.schemas.domain import now
 from app.web.common import amount, get_product, protected, render, selection, validate_thresholds
 
 router = APIRouter()
@@ -84,6 +87,29 @@ async def toggle_listing(request: Request, listing_id: int):
         if listing is None:
             raise HTTPException(404, "Listing not found")
         listing.enabled = not listing.enabled
+        product_id = listing.product_id
+    return RedirectResponse(f"/products/{product_id}", 303)
+
+
+@router.post("/listings/{listing_id}/interval", dependencies=[Depends(protected)])
+async def listing_interval(request: Request, listing_id: int):
+    runtime = request.app.state.runtime
+    value = str((await request.form()).get("minutes", "")).strip()
+    minutes = None
+    if value:
+        try:
+            minutes = int(value)
+            if not 5 <= minutes <= 10080:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(422, "Interval must be between 5 and 10080 minutes") from None
+    with runtime.db.session() as session:
+        listing = session.get(Listing, listing_id)
+        if listing is None:
+            raise HTTPException(404, "Listing not found")
+        listing.check_interval_minutes = minutes
+        if minutes is not None:
+            listing.next_check_at = min(listing.next_check_at, now() + timedelta(minutes=minutes))
         product_id = listing.product_id
     return RedirectResponse(f"/products/{product_id}", 303)
 

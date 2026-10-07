@@ -408,6 +408,17 @@ def test_settings_lists_and_forgets_store_rules(site):
     assert "No store rules yet" in client.get("/settings").text
 
 
+def test_settings_describes_a_cart_button_stock_rule(site):
+    client, runtime, _, _ = site
+    rule = PriceRule(
+        price_selector="span.amount",
+        availability_selector="button.add",
+        availability_mode="presence",
+    )
+    runtime.rules.save("storeone.pt", rule)
+    assert "in stock while an enabled cart button is shown" in client.get("/settings").text
+
+
 def test_forgetting_a_store_without_a_rule_returns_to_settings(site):
     client, _, _, _ = site
     client.get("/settings")

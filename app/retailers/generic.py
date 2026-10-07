@@ -44,7 +44,9 @@ LOCAL_SUFFIXES = (
 PUBLIC_ONLY = "Only public https:// store links can be monitored"
 OUT_OF_STOCK_TEXT = ("esgotado", "indisponível", "sem stock", "fora de stock", "out of stock")
 CURRENCIES = (("EUR", "€"), ("GBP", "£"), ("USD", "$"))
-CURRENCY_MARK = re.compile(r"[€$£]|EUR|GBP|USD", re.I)
+# Letter codes count only as whole words ("euros" and "europeia" are not EUR), but a digit may
+# touch them: some stores write "1.299,99EUR".
+CURRENCY_MARK = re.compile(r"[€$£]|(?<![a-z])(?:EUR|GBP|USD)(?![a-z])", re.I)
 BARE_AMOUNT = re.compile(r"[\d\s.,]+")
 # Exact vocabulary only: parsing.availability() matches substrings, and "in stock" is inside
 # Spanish "sin stock".

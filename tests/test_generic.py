@@ -497,7 +497,14 @@ def test_teach_never_stores_a_rule_its_reader_would_refuse():
 
 @pytest.mark.parametrize(
     "text",
-    ["Garantia 3 anos", "4,5 (123 avaliações)", "de 1.499 € por 999 €", "1.299 € ou 3x 433 €"],
+    [
+        "Garantia 3 anos",
+        "4,5 (123 avaliações)",
+        "de 1.499 € por 999 €",
+        "1.299 € ou 3x 433 €",
+        "Garantia europeia 3 anos",
+        "Poupe 200 euros",
+    ],
 )
 def test_rule_refuses_text_that_is_not_a_single_price(text):
     page = soup(f'<h1>P</h1><span class="x">{text}</span>')
@@ -509,6 +516,27 @@ def test_rule_reads_a_bare_amount():
         soup('<h1>P</h1><span class="x">1299,99</span>'), PriceRule(price_selector="span.x")
     )
     assert (reading.price, reading.method) == (Decimal("1299.99"), "rule")
+
+
+@pytest.mark.parametrize(
+    ("text", "price"),
+    [
+        ("EUR 1.299,99", Decimal("1299.99")),
+        ("1.299,99 EUR", Decimal("1299.99")),
+        ("1.299,99EUR", Decimal("1299.99")),
+        ("1.299 €", Decimal("1299.00")),
+    ],
+)
+def test_rule_reads_a_price_marked_by_symbol_or_code(text, price):
+    reading = read_rule(
+        soup(f'<h1>P</h1><span class="x">{text}</span>'), PriceRule(price_selector="span.x")
+    )
+    assert (reading.price, reading.currency) == (price, "EUR")
+
+
+def test_currency_word_inside_a_price_label_is_not_a_second_marker():
+    candidates = price_candidates(soup('<h1>P</h1><span class="price">1.299,99 € (euros)</span>'))
+    assert [c.price for c in candidates] == [Decimal("1299.99")]
 
 
 def test_rule_whose_element_gained_instalment_text_falls_back(db, caplog):

@@ -55,7 +55,7 @@ class DiscoveryService:
         for url in payload["urls"]:
             try:
                 retailers.add(self.registry.for_url(url).name)
-            except ScrapeError:
+            except (ScrapeError, ValueError):
                 pass
         self.registry.fetcher.retry_now(retailers)
         # Manual sources seed identity but never replace the independent retailer searches.

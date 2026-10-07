@@ -19,6 +19,14 @@ from app.web.common import (
 router = APIRouter()
 
 
+def full_https(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:  # e.g. "https://www.[::1]/p"
+        return False
+    return parts.scheme == "https" and bool(parts.hostname)
+
+
 @router.post("/discoveries", dependencies=[Depends(protected)])
 async def start_discovery(request: Request):
     runtime = request.app.state.runtime
@@ -29,9 +37,9 @@ async def start_discovery(request: Request):
         raise HTTPException(422, "Use a name up to 250 characters and at most 20 product URLs")
     if not name and not urls:
         raise HTTPException(422, "Enter a product name/model or at least one retailer URL")
-    # Links from unsupported stores are reported in the discovery notes instead of rejecting
-    # the whole form, so one unusable link never discards the others.
-    if any(urlsplit(url).scheme != "https" or not urlsplit(url).hostname for url in urls):
+    # Only the shape is checked here. A link that cannot be read (a non-public host, a page
+    # that fails to load) becomes a discovery note, so one bad link never discards the others.
+    if not all(full_https(url) for url in urls):
         raise HTTPException(422, "Product links must be full https:// URLs")
     target, insane = amount(form, "target_price"), amount(form, "insane_deal_price")
     validate_thresholds(target, insane)

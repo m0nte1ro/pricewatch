@@ -769,3 +769,14 @@ async def test_scheduled_check_does_not_list_the_page_prices(site, monkeypatch):
     with runtime.db.session() as session:
         assert session.scalar(select(func.count()).select_from(PriceHistory)) == 2
     assert calls == []
+
+
+def test_link_the_url_parser_refuses_is_rejected_at_the_form(site):
+    client, _, _, requests = site
+    response = client.post(
+        "/discoveries",
+        data=form_data(client, name="TV", urls=["https://www.[::1]/p"], retailers=[]),
+    )
+    assert response.status_code == 422
+    assert "Product links must be full https:// URLs" in response.text
+    assert requests == []

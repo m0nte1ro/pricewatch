@@ -210,3 +210,22 @@ async def test_stored_listing_on_a_non_public_host_is_never_requested(site, cand
             == "Only public https:// store links can be monitored"
         )
     assert requests == []
+
+
+def test_stock_alert_from_an_unconfirmed_reading_says_its_price_is_unconfirmed(db, candidate):
+    candidate.listing.availability = "out_of_stock"
+    create_product(db, candidate)
+    back = {"availability": "in_stock", "method": "heuristic"}
+    update(db, candidate.listing.model_copy(update=back))
+    update(db, candidate.listing.model_copy(update={"method": "rule"}))
+    update(db, candidate.listing.model_copy(update={**back, "method": "rule"}))
+    with db.session() as session:
+        messages = list(
+            session.scalars(
+                select(Alert.message)
+                .where(Alert.event_type == "became_available")
+                .order_by(Alert.id)
+            )
+        )
+    assert messages[0].endswith("· 1199.00 → 1199.00 EUR (price unconfirmed)")
+    assert messages[1].endswith("· 1199.00 → 1199.00 EUR")

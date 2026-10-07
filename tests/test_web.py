@@ -469,7 +469,7 @@ def test_confirm_price_from_product_page(site):
         )
         assert session.scalar(select(func.count()).select_from(PriceHistory)) == 2
         assert listing.next_check_at > now()
-    assert "price unconfirmed" not in client.get(product_path).text
+    assert '<span class="badge low">price unconfirmed</span>' not in client.get(product_path).text
     assert client.get("/listings/999/confirm-price").status_code == 404
 
 

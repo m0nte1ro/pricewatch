@@ -462,6 +462,7 @@ def test_rule_reading_wins_over_structured_data_and_offers_the_page_candidates(d
         '"offers":{"price":"1499.00","availability":"https://schema.org/OutOfStock"}}</script>'
         '<span class="price-current">1.299,99 €</span>',
         "https://www.storeone.pt/p",
+        alternatives=True,
     )[0]
     assert (snapshot.method, snapshot.price) == ("rule", Decimal("1299.99"))
     assert [c.price for c in snapshot.alternatives] == [Decimal("1299.99")]
@@ -662,3 +663,28 @@ CART_RULE = PriceRule(
 def test_presence_rule_needs_a_working_cart_button(button, expected):
     page = soup(f'<h1>P</h1><span class="amount">999 €</span>{button}')
     assert read_rule(page, CART_RULE).availability == expected
+
+
+STRUCTURED_PRICED_PAGE = (
+    '<h1>TCL 85C7K</h1><script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+    '"offers":{"price":"1199.00","priceCurrency":"EUR"}}</script>'
+    '<span class="price-current">1.199,00 €</span><span class="old-price">1.499,00 €</span>'
+)
+
+
+@pytest.mark.parametrize(
+    ("page", "rule", "method"),
+    [
+        (HEURISTIC_PAGE, PriceRule(price_selector="span.price-current"), "rule"),
+        (STRUCTURED_PRICED_PAGE, None, "structured"),
+    ],
+)
+def test_page_prices_are_listed_only_when_asked_for(db, page, rule, method):
+    rules = RuleService(db)
+    if rule:
+        rules.save("storeone.pt", rule)
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules)
+    plain = adapter.parse(page, "https://www.storeone.pt/p")[0]
+    assert (plain.method, plain.alternatives) == (method, [])
+    listed = adapter.parse(page, "https://www.storeone.pt/p", alternatives=True)[0]
+    assert listed.method == method and Decimal("1499.00") in {c.price for c in listed.alternatives}

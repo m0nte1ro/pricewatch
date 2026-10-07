@@ -400,8 +400,14 @@ class GenericAdapter(RetailerAdapter):
     async def search_product(self, identity: Identity) -> list[str]:
         return []
 
-    def parse(self, html: str, url: str, *, rule: PriceRule | None = None) -> list[Snapshot]:
-        """Read the page, with `rule` in place of the store's saved rule when given."""
+    def parse(
+        self, html: str, url: str, *, rule: PriceRule | None = None, alternatives: bool = False
+    ) -> list[Snapshot]:
+        """Read the page, with `rule` in place of the store's saved rule when given.
+
+        `alternatives` lists the page's prices for the owner to confirm one. Scheduled checks
+        never show them, so they skip the work.
+        """
         soup = BeautifulSoup(html, "html.parser")
         try:
             snapshots = super().parse(html, url)
@@ -415,7 +421,8 @@ class GenericAdapter(RetailerAdapter):
         # Structured data without a price is a miss: the page itself may still show one.
         priced = next((s for s in snapshots if s.price is not None), None)
         if reading is None and priced is not None:
-            priced.alternatives = price_candidates(soup)
+            if alternatives:
+                priced.alternatives = price_candidates(soup)
             return [priced]
         reading = reading or read_meta(soup) or read_heuristic(soup)
         if snapshots:
@@ -426,16 +433,19 @@ class GenericAdapter(RetailerAdapter):
                 reading.availability = snapshots[0].availability
         snapshot = self.snapshot(reading, soup, url)
         # A heuristic reading already holds the page's candidates.
-        if snapshot.method != "heuristic":
+        if alternatives and snapshot.method != "heuristic":
             snapshot.alternatives = price_candidates(soup)
         return [snapshot]
+
+    def parse_page(self, html: str, url: str, alternatives: bool) -> list[Snapshot]:
+        return self.parse(html, url, alternatives=alternatives)
 
     def preview_rule(
         self, html: str, url: str, price: Decimal, availability: str | None
     ) -> tuple[PriceRule, Snapshot]:
         """Teach a rule from the confirmed price and read the page with it, without saving it."""
         rule = teach(BeautifulSoup(html, "html.parser"), price, availability)
-        return rule, self.parse(html, url, rule=rule)[0]
+        return rule, self.parse(html, url, rule=rule, alternatives=True)[0]
 
     def learn(self, html: str, url: str, price: Decimal, availability: str | None) -> Snapshot:
         rule, snapshot = self.preview_rule(html, url, price, availability)

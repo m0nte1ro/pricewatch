@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import Alert, DiscoveryDraft, Listing, PriceHistory, Product, RetailerState
+from app.retailers import generic
 from app.schemas.domain import PriceRule, now
 from tests.conftest import GENERIC_PAGES, URLS
 from tests.test_generic import OLD_PRICE_FIRST_PAGE
@@ -188,7 +189,7 @@ async def test_uncertain_and_conflicting_candidate_review(site):
 async def test_manual_adapter_failure_does_not_stop_independent_discovery(site, monkeypatch):
     _, runtime, _, _ = site
 
-    async def broken(url):
+    async def broken(url, *, alternatives=False):
         raise KeyError("unexpected retailer markup")
 
     monkeypatch.setattr(runtime.registry.adapters["worten"], "fetch_listing", broken)
@@ -736,3 +737,35 @@ def test_price_cannot_be_confirmed_while_a_listing_is_not_monitored(site, owner,
         assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
         assert list(session.scalars(select(Alert.event_type))) == ["new_listing"]
     assert runtime.rules.get("storeone.pt") is None
+
+
+SECOND_PRICE_RULE = PriceRule(price_selector="span.price:nth-of-type(2)")
+
+
+def test_a_store_rule_reading_still_offers_the_page_prices_to_confirm(site):
+    client, runtime, _, _ = site
+    runtime.rules.save("storeone.pt", SECOND_PRICE_RULE)
+    GENERIC_PAGES[CHANGED_URL] = OLD_PRICE_FIRST_PAGE
+    path, page = discover(client, name="TCL 85C7K", urls=[CHANGED_URL], retailers=[])
+    assert "store rule" in page.text and "1.499,00 €" in page.text
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert listing.extraction_method == "rule"
+    assert "1.499,00 €" in client.get(f"/listings/{listing.id}/confirm-price").text
+
+
+async def test_scheduled_check_does_not_list_the_page_prices(site, monkeypatch):
+    client, runtime, _, _ = site
+    runtime.rules.save("storeone.pt", SECOND_PRICE_RULE)
+    GENERIC_PAGES[CHANGED_URL] = OLD_PRICE_FIRST_PAGE
+    path, _ = discover(client, name="TCL 85C7K", urls=[CHANGED_URL], retailers=[])
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    calls = []
+    monkeypatch.setattr(generic, "price_candidates", lambda soup: calls.append(soup) or [])
+    with runtime.db.session() as session:
+        session.scalar(select(Listing)).next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 2
+    assert calls == []

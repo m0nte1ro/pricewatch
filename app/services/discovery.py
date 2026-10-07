@@ -67,7 +67,7 @@ class DiscoveryService:
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
-                manual.extend(await adapter.fetch_listing(url))
+                manual.extend(await adapter.fetch_listing(url, alternatives=True))
             except (ScrapeError, ValueError) as exc:
                 errors.append(f"Manual URL ({urlsplit(url).hostname}): {exc}")
             except Exception:

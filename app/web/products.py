@@ -145,7 +145,8 @@ async def listing_confirm_form(request: Request, listing_id: int):
     listing = generic_listing(runtime, listing_id)
     context = {"listing": listing, "product": listing.product, "title": listing.title}
     try:
-        snapshots = await runtime.registry[listing.retailer].fetch_listing(listing.url)
+        adapter = runtime.registry[listing.retailer]
+        snapshots = await adapter.fetch_listing(listing.url, alternatives=True)
     except ScrapeError as exc:
         return render(request, "listing_confirm.html", **context, error=str(exc))
     snapshot, error = verify_offer(listing, snapshots)

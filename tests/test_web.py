@@ -1,3 +1,4 @@
+import json
 import re
 import time
 from datetime import timedelta
@@ -540,6 +541,73 @@ def test_manual_conflicting_link_is_saved_with_warning(site):
     assert response.status_code == 303
     with runtime.db.session() as session:
         assert session.scalar(select(func.count()).select_from(Listing)) == 1
+
+
+PASTED_URL = "https://www.storeone.pt/p/other"
+
+
+def save_pasted_conflicting_link(client, runtime):
+    GENERIC_PAGES[PASTED_URL] = STORE_PAGE.replace("85C7K", "75C8K")
+    path, _ = discover(client, name="TCL 85C7K", urls=[PASTED_URL], retailers=[])
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    with runtime.db.session() as session:
+        session.scalar(select(Listing)).next_check_at = now() - timedelta(minutes=1)
+
+
+async def test_pasted_conflicting_link_is_checked_against_its_own_model(site):
+    client, runtime, _, _ = site
+    save_pasted_conflicting_link(client, runtime)
+    GENERIC_PAGES[PASTED_URL] = STORE_PAGE.replace("85C7K", "75C8K").replace("1.299,99", "1.199,99")
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert (listing.last_error, listing.current_price) == (None, Decimal("1199.99"))
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 2
+
+
+async def test_pasted_conflicting_link_still_flags_a_further_model_change(site):
+    client, runtime, _, _ = site
+    save_pasted_conflicting_link(client, runtime)
+    GENERIC_PAGES[PASTED_URL] = STORE_PAGE.replace("85C7K", "65C6K")
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert listing.last_error == "Product identity changed on retailer page; review required"
+        assert listing.current_price == Decimal("1299.99")
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
+
+
+async def test_discovered_listing_flags_a_model_change(site):
+    client, runtime, _, _ = site
+    path, _ = discover(client, retailers=["worten"])
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    offer = {
+        "@type": "Offer",
+        "price": "999.00",
+        "priceCurrency": "EUR",
+        "availability": "https://schema.org/InStock",
+        "itemCondition": "https://schema.org/NewCondition",
+        "seller": {"name": "worten"},
+    }
+    other = {
+        "@type": "Product",
+        "name": "TCL 75C8K",
+        "brand": {"name": "TCL"},
+        "model": "75C8K",
+        "offers": offer,
+    }
+    GENERIC_PAGES[URLS["worten"]] = (
+        f'<h1>TCL 75C8K</h1><script type="application/ld+json">{json.dumps(other)}</script>'
+    )
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert listing.sources == ["discovered"]
+        listing.next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert listing.last_error == "Product identity changed on retailer page; review required"
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
 
 
 def test_quick_link_from_product_page(site):

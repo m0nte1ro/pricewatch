@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.models import Listing, Product
 from app.schemas.domain import Identity, now
 from app.services.listings import effective_interval, record_snapshot
-from app.services.matching import match_identity, normalize
+from app.services.matching import identify, match_identity, normalize
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,11 @@ class MonitoringService:
                 category=product.category,
                 identifiers=product.specifications,
             )
+            # A pasted link saved despite naming another model is checked against that model,
+            # the one the owner accepted, so only a further change is flagged.
+            pasted = identify(listing.title)
+            if "manual" in listing.sources and match_identity(identity, pasted).level == "CONFLICT":
+                identity = pasted
         error, snapshot = None, None
         try:
             snapshots = await self.registry[listing.retailer].fetch_listing(listing.url)

@@ -478,3 +478,64 @@ def test_rule_reading_keeps_structured_out_of_stock_state(db):
         "https://www.storeone.pt/p",
     )[0]
     assert (snapshot.method, snapshot.availability) == ("rule", "out_of_stock")
+
+
+def test_teach_prefers_the_innermost_element_on_equal_text():
+    s = soup(
+        '<div class="price-box"><span class="price">1.299 €</span></div>'
+        '<div class="stock"><span class="label">Em stock</span></div>'
+    )
+    rule = teach(s, Decimal("1299"), "in_stock")
+    assert s.select_one(rule.price_selector) is s.select_one("span.price")
+    assert s.select_one(rule.availability_selector) is s.select_one("span.label")
+
+
+def test_teach_never_stores_a_rule_its_reader_would_refuse():
+    with pytest.raises(ScrapeError, match="Could not find a price of 3 on the page"):
+        teach(soup('<span class="x">Garantia 3 anos</span>'), Decimal("3"), None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Garantia 3 anos", "4,5 (123 avaliações)", "de 1.499 € por 999 €", "1.299 € ou 3x 433 €"],
+)
+def test_rule_refuses_text_that_is_not_a_single_price(text):
+    page = soup(f'<h1>P</h1><span class="x">{text}</span>')
+    assert read_rule(page, PriceRule(price_selector="span.x")) is None
+
+
+def test_rule_reads_a_bare_amount():
+    reading = read_rule(
+        soup('<h1>P</h1><span class="x">1299,99</span>'), PriceRule(price_selector="span.x")
+    )
+    assert (reading.price, reading.method) == (Decimal("1299.99"), "rule")
+
+
+def test_rule_whose_element_gained_instalment_text_falls_back(db, caplog):
+    rules = RuleService(db)
+    rules.save("storeone.pt", PriceRule(price_selector="div.price-box"))
+    snapshot = GenericAdapter(Fetcher(None, None), "storeone.pt", rules=rules).parse(
+        '<h1>TV TCL 85C7K</h1><div class="price-box"><span class="price">1.299 €</span> '
+        "<small>ou 3x 433 €</small></div>",
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.method, snapshot.price) == ("heuristic", Decimal("1299.00"))
+    assert [r.getMessage() for r in caplog.records] == ["store_rule_failed"]
+
+
+CART_RULE = PriceRule(
+    price_selector="span.amount", availability_selector="button.add", availability_mode="presence"
+)
+
+
+@pytest.mark.parametrize(
+    ("button", "expected"),
+    [
+        ('<button class="add">Esgotado</button>', "out_of_stock"),
+        ('<button class="add" disabled>Adicionar ao carrinho</button>', "out_of_stock"),
+        ('<button class="add">Adicionar ao carrinho</button>', "in_stock"),
+    ],
+)
+def test_presence_rule_needs_a_working_cart_button(button, expected):
+    page = soup(f'<h1>P</h1><span class="amount">999 €</span>{button}')
+    assert read_rule(page, CART_RULE).availability == expected

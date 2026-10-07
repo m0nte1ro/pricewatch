@@ -45,6 +45,7 @@ PUBLIC_ONLY = "Only public https:// store links can be monitored"
 OUT_OF_STOCK_TEXT = ("esgotado", "indisponível", "sem stock", "fora de stock", "out of stock")
 CURRENCIES = (("EUR", "€"), ("GBP", "£"), ("USD", "$"))
 CURRENCY_MARK = re.compile(r"[€$£]|EUR|GBP|USD", re.I)
+BARE_AMOUNT = re.compile(r"[\d\s.,]+")
 # Exact vocabulary only: parsing.availability() matches substrings, and "in stock" is inside
 # Spanish "sin stock".
 META_STOCK = {
@@ -276,16 +277,24 @@ def _rule_availability(soup: BeautifulSoup, rule: PriceRule) -> str:
         return heuristic_availability(soup)
     element = soup.select_one(rule.availability_selector)
     if rule.availability_mode == "presence":
-        # A disabled cart button is how many stores show an item they cannot sell.
-        present = element is not None and not element.has_attr("disabled")
-        return "in_stock" if present else "out_of_stock"
+        # Sold-out pages often keep the slot but disable it or relabel it "Esgotado"/"Notify me".
+        return "in_stock" if element is not None and _cart_button(element) else "out_of_stock"
     return availability(element.get_text(" ", strip=True)) if element is not None else "unknown"
+
+
+def _rule_price(text: str) -> Decimal | None:
+    # A rule's element can change under it, and money() coerces any digits: instalments,
+    # "from ... to" pairs, warranties and ratings would read as a confirmed wrong price.
+    marks = len(CURRENCY_MARK.findall(text))
+    if len(text) > 40 or marks > 1 or not (marks or BARE_AMOUNT.fullmatch(text)):
+        return None
+    return money(text)
 
 
 def read_rule(soup: BeautifulSoup, rule: PriceRule) -> Reading | None:
     element = soup.select_one(rule.price_selector)
     text = element.get_text(" ", strip=True) if element is not None else ""
-    if (price := money(text)) is None:
+    if (price := _rule_price(text)) is None:
         return None
     return Reading(
         title=page_title(soup),
@@ -301,8 +310,8 @@ def _shortest(soup: BeautifulSoup, limit: int, accept: Callable[[str], bool]) ->
     found = None
     for element in soup.find_all(lambda t: t.name not in ("script", "style")):
         text = element.get_text(" ", strip=True)
-        # Strictly shorter only, so equal lengths keep the first in document order.
-        if len(text) <= limit and accept(text) and (found is None or len(text) < found[0]):
+        # A descendant comes later in document order, so on equal text the innermost wins.
+        if len(text) <= limit and accept(text) and (found is None or len(text) <= found[0]):
             found = (len(text), element)
     return found[1] if found else None
 
@@ -319,7 +328,7 @@ def _stock_rule(soup: BeautifulSoup, state: str | None) -> tuple[str | None, str
 
 
 def teach(soup: BeautifulSoup, price: Decimal, availability: str | None) -> PriceRule:
-    element = _shortest(soup, 40, lambda text: money(text) == price)
+    element = _shortest(soup, 40, lambda text: _rule_price(text) == price)
     if element is None:
         raise ScrapeError(f"Could not find a price of {price} on the page")
     selector, mode = _stock_rule(soup, availability)

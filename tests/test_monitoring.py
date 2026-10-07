@@ -229,3 +229,29 @@ def test_stock_alert_from_an_unconfirmed_reading_says_its_price_is_unconfirmed(d
         )
     assert messages[0].endswith("· 1199.00 → 1199.00 EUR (price unconfirmed)")
     assert messages[1].endswith("· 1199.00 → 1199.00 EUR")
+
+
+def test_unconfirmed_history_never_sets_the_low_high_or_first_price(db, candidate):
+    start = now() - timedelta(days=10)
+    candidate.listing.method, candidate.listing.price = "heuristic", Decimal("400")
+    candidate.listing.observed_at = start
+    product_id = create_product(db, candidate)
+    for offset, method, price in (
+        (timedelta(days=1), "rule", "1199"),
+        (timedelta(days=2), "rule", "1100"),
+        (timedelta(days=9), "heuristic", "300"),
+        (timedelta(days=9, minutes=1), "heuristic", "2000"),
+    ):
+        reading = {"method": method, "price": Decimal(price), "observed_at": start + offset}
+        update(db, candidate.listing.model_copy(update=reading))
+    detail = QueryService(db).detail(product_id)
+    assert (detail["low"], detail["high"], detail["first"], detail["days_since_low"]) == (
+        Decimal("1100"),
+        Decimal("1199"),
+        Decimal("1199"),
+        8,
+    )
+    assert QueryService(db).dashboard()[0]["low"] == Decimal("1100")
+    with db.session() as session:
+        rows = session.scalars(select(PriceHistory.method).order_by(PriceHistory.timestamp))
+        assert list(rows) == ["heuristic", "rule", "rule", "heuristic", "heuristic"]

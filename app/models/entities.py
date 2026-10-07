@@ -84,6 +84,9 @@ class PriceHistory(Base):
     availability: Mapped[str] = mapped_column(String(30))
     condition: Mapped[str] = mapped_column(String(30))
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
+    method: Mapped[str] = mapped_column(
+        String(20), default="structured", server_default="structured"
+    )
 
 
 class Alert(Base):

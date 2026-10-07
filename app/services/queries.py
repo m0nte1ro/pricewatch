@@ -6,6 +6,10 @@ from sqlalchemy import func, select
 from app.models import Alert, Listing, PriceHistory, Product
 from app.schemas.domain import now
 
+# Unconfirmed (heuristic) prices are charted but may be a wrong element's amount, so they never
+# become a historical low, high or first price.
+CONFIRMED_EUR = (PriceHistory.currency == "EUR", PriceHistory.method != "heuristic")
+
 
 def summary(product: Product, low: Decimal | None = None) -> dict:
     active = [x for x in product.listings if x.enabled]
@@ -72,7 +76,7 @@ class QueryService:
                 session.execute(
                     select(Listing.product_id, func.min(PriceHistory.price))
                     .join(PriceHistory)
-                    .where(PriceHistory.currency == "EUR")
+                    .where(*CONFIRMED_EUR)
                     .group_by(Listing.product_id)
                 ).all()
             )
@@ -85,7 +89,7 @@ class QueryService:
                 return None
             eligible = (
                 Listing.product_id == product_id,
-                PriceHistory.currency == "EUR",
+                *CONFIRMED_EUR,
                 PriceHistory.price.is_not(None),
             )
             low, high = session.execute(

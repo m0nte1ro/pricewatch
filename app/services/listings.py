@@ -27,6 +27,7 @@ def record_snapshot(
             availability=snapshot.availability,
             condition=str(snapshot.condition),
             currency=snapshot.currency,
+            method=snapshot.method,
         )
     )
     if listing.current_price != snapshot.price:

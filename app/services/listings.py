@@ -158,6 +158,7 @@ def add_candidates(
         snapshot = candidate.listing
         rows = session.scalars(
             select(Listing).where(
+                Listing.product_id == product.id,
                 Listing.retailer == snapshot.retailer,
                 Listing.condition == str(snapshot.condition),
                 Listing.seller_key == normalize(snapshot.seller),
@@ -175,7 +176,6 @@ def add_candidates(
                     )
                     or (
                         not (row.retailer_product_id and snapshot.retailer_product_id)
-                        and row.product_id == product.id
                         and normalize(row.title) == normalize(snapshot.title)
                         and candidate.match.level in ("EXACT", "HIGH")
                     )
@@ -184,8 +184,6 @@ def add_candidates(
             None,
         )
         if duplicate:
-            if duplicate.product_id != product.id:
-                raise ValueError("A selected listing is already monitored under another product")
             duplicate.sources = sorted(set(duplicate.sources + candidate.sources))
             continue
         listing = Listing(

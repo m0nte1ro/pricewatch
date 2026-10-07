@@ -902,3 +902,32 @@ def test_queued_discovery_says_it_is_waiting(site):
     client, runtime, _, _ = site
     draft = runtime.discovery.create(payload())
     assert "Waiting for another discovery to finish" in client.get(f"/discoveries/{draft}").text
+
+
+def test_the_same_link_can_be_watched_by_several_products(site):
+    # One link, two watches (e.g. different targets): each product keeps its own listing.
+    client, runtime, _, _ = site
+    first = saved_product(client)
+    path, _ = discover(
+        client, urls=[URLS["worten"]], retailers=[], target_price="700", insane_deal_price="600"
+    )
+    second = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    assert second != first
+    GENERIC_PAGES[STORE_URL] = STORE_PAGE
+    for product_path in (first, second):
+        response = client.post(
+            product_path + "/links", data=form_data(client, url=STORE_URL), follow_redirects=False
+        )
+        assert response.headers["location"].endswith("?added=1")
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Product)) == 2
+        rows = session.scalars(select(Listing).order_by(Listing.product_id)).all()
+        assert [(r.product_id, r.retailer) for r in rows] == [
+            (1, "worten"),
+            (1, "storeone.pt"),
+            (2, "worten"),
+            (2, "storeone.pt"),
+        ]
+        assert session.get(Product, 2).target_price == Decimal("700")

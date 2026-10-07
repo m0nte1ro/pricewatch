@@ -4,8 +4,6 @@ import uuid
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
-
 from app.models import DiscoveryDraft, Product
 from app.retailers.generic import GenericAdapter
 from app.retailers.parsing import ScrapeError
@@ -219,17 +217,9 @@ class DiscoveryService:
             # A link the user pasted is saved as pasted; only search results must match.
             if any(c.match.level == "CONFLICT" and "manual" not in c.sources for c in chosen):
                 raise ValueError("Conflicting models cannot be merged into this product")
+            # "Find / add listings" adds to its product; a new product is always new, so the
+            # same model can be watched more than once (e.g. with different targets).
             product = session.get(Product, draft.product_id) if draft.product_id else None
-            if product is None and identity.model:
-                matches = session.scalars(
-                    select(Product).where(
-                        Product.model == identity.model, Product.archived.is_(False)
-                    )
-                ).all()
-                product = next(
-                    (p for p in matches if p.brand == identity.brand and p.size == identity.size),
-                    None,
-                )
             if product and product.archived:
                 raise ValueError("Restore the archived product before adding listings")
             if product is None:

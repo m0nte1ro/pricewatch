@@ -42,8 +42,18 @@ class Product(Base):
 class Listing(Base):
     __tablename__ = "listings"
     __table_args__ = (
-        UniqueConstraint("retailer", "url", "condition", "seller_key"),
-        UniqueConstraint("retailer", "retailer_product_id", "condition", "seller_key"),
+        # Unique per product: several products may watch the same offer.
+        UniqueConstraint(
+            "product_id", "retailer", "url", "condition", "seller_key", name="uq_listings_offer_url"
+        ),
+        UniqueConstraint(
+            "product_id",
+            "retailer",
+            "retailer_product_id",
+            "condition",
+            "seller_key",
+            name="uq_listings_offer_item",
+        ),
         Index("ix_listings_due", "enabled", "next_check_at"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)

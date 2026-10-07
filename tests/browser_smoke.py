@@ -25,7 +25,10 @@ with sync_playwright() as playwright:
     page.locator('input[name="urls"]').nth(1).fill(URLS["worten"] + "?utm_source=duplicate")
     page.locator('input[name="target_price"]').fill("900")
     page.locator('input[name="insane_deal_price"]').fill("800")
-    page.get_by_role("button", name="Discover listings").click()
+    page.get_by_text("Also search known stores").click()
+    for store in page.locator('input[name="retailers"]').all():
+        store.check()
+    page.get_by_role("button", name="Review listings").click()
     expect(page.get_by_role("button", name="Confirm and monitor")).to_be_visible(timeout=20000)
     expect(page.locator('input[name="selected"]:checked')).to_have_count(5)
     page.screenshot(path=str(root / "discovery.png"), full_page=True)

@@ -206,7 +206,8 @@ class DiscoveryService:
             if any(i < 0 or i >= len(candidates) for i in selected):
                 raise ValueError("Invalid listing selection")
             chosen = [candidates[i] for i in set(selected)]
-            if any(c.match.level == "CONFLICT" for c in chosen):
+            # A link the user pasted is saved as pasted; only search results must match.
+            if any(c.match.level == "CONFLICT" and "manual" not in c.sources for c in chosen):
                 raise ValueError("Conflicting models cannot be merged into this product")
             product = session.get(Product, draft.product_id) if draft.product_id else None
             if product is None and identity.model:

@@ -35,6 +35,9 @@ async def start_discovery(request: Request):
         raise HTTPException(422, "Product links must be full https:// URLs")
     target, insane = amount(form, "target_price"), amount(form, "insane_deal_price")
     validate_thresholds(target, insane)
+    retailers = selection(form, "retailers", runtime.registry.adapters)
+    if not urls and not retailers:
+        raise HTTPException(422, "Add at least one link, or pick stores to search")
     product_id = int(form["product_id"]) if str(form.get("product_id", "")).isdigit() else None
     category = str(form.get("category", "general")).strip()[:100] or "general"
     if product_id:
@@ -50,7 +53,7 @@ async def start_discovery(request: Request):
         "target_price": target,
         "insane_deal_price": insane,
         "conditions": selection(form, "conditions", list(Condition)),
-        "retailers": selection(form, "retailers", runtime.registry.adapters),
+        "retailers": retailers,
     }
     draft_id = runtime.discovery.create(payload, product_id)
     runtime.spawn(runtime.discovery.run(draft_id))

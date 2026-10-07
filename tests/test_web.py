@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import timedelta
 from decimal import Decimal
@@ -511,3 +512,67 @@ def test_forgetting_a_store_rule_requires_the_form_token(site):
     response = client.post("/settings/rules/storeone.pt/forget", data={"csrf": "wrong"})
     assert response.status_code == 403
     assert runtime.rules.get("storeone.pt") is not None
+
+
+def test_add_form_requires_links_or_stores(site):
+    client, _, _, _ = site
+    response = client.post(
+        "/discoveries", data=form_data(client, name="TCL 85C7K", conditions=["new"])
+    )
+    assert (
+        response.status_code == 422
+        and "Add at least one link, or pick stores to search" in response.text
+    )
+    page = client.get("/products/new").text
+    assert "Also search known stores" in page and 'value="worten" checked' not in page
+
+
+def test_manual_conflicting_link_is_saved_with_warning(site):
+    client, runtime, _, _ = site
+    GENERIC_PAGES["https://www.storeone.pt/p/other"] = STORE_PAGE.replace("85C7K", "75C8K")
+    path, page = discover(
+        client, name="TCL 85C7K", urls=["https://www.storeone.pt/p/other"], retailers=[]
+    )
+    assert "saved as pasted" in page.text and 'value="0" checked' in page.text
+    response = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    )
+    assert response.status_code == 303
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 1
+
+
+def test_quick_link_from_product_page(site):
+    client, runtime, _, _ = site
+    path, _ = discover(client, urls=[URLS["worten"]], retailers=[])
+    product_path = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    assert 'placeholder="Paste a store link"' in client.get(product_path).text
+    GENERIC_PAGES["https://www.storeone.pt/produto/tcl-85c7k"] = STORE_PAGE
+    path, _ = discover(
+        client,
+        product_id=product_path.rsplit("/", 1)[1],
+        urls=["https://www.storeone.pt/produto/tcl-85c7k"],
+        retailers=[],
+    )
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    with runtime.db.session() as session:
+        assert {x.retailer for x in session.scalars(select(Listing))} == {"worten", "storeone.pt"}
+
+
+def test_discovered_conflicting_listing_stays_blocked(site, monkeypatch):
+    client, runtime, _, _ = site
+
+    async def unfiltered(identity):
+        return [URLS["worten"]]
+
+    monkeypatch.setattr(runtime.registry.adapters["worten"], "search_product", unfiltered)
+    path, page = discover(client, name="TCL 75C8K", retailers=["worten"])
+    assert "CONFLICT" in page.text and "saved as pasted" not in page.text
+    assert re.search(r'value="0"\s+disabled>', page.text)
+    response = client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    assert response.status_code == 422
+    assert "Conflicting models cannot be merged into this product" in response.text
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 0

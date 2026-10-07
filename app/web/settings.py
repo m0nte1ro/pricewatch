@@ -1,19 +1,21 @@
+import json
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.models import Alert, Listing, RetailerState
-from app.schemas.domain import Preferences
+from app.schemas.domain import Preferences, now
+from app.services.transfer import TransferError, export_data, import_data
 from app.web.common import protected, render, selection
 
 router = APIRouter()
+MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 
-@router.get("/settings")
-async def settings_page(request: Request, saved: bool = False):
+def settings_view(request: Request, **context):
     runtime = request.app.state.runtime
     with runtime.db.session() as session:
         states = {s.name: s for s in session.scalars(select(RetailerState))}
@@ -23,8 +25,37 @@ async def settings_page(request: Request, saved: bool = False):
         preferences=runtime.settings.get(),
         states=states,
         rules=runtime.rules.all(),
-        saved=saved,
+        **context,
     )
+
+
+@router.get("/settings")
+async def settings_page(request: Request, saved: bool = False):
+    return settings_view(request, saved=saved)
+
+
+@router.get("/export")
+async def export_watchlist(request: Request):
+    data = export_data(request.app.state.runtime.db)
+    name = f"pricewatch-{now():%Y%m%d-%H%M}.json"
+    return JSONResponse(data, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.post("/import", dependencies=[Depends(protected)])
+async def import_watchlist(request: Request):
+    runtime = request.app.state.runtime
+    upload = (await request.form()).get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(422, "Choose a pricewatch export file to import")
+    raw = await upload.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(422, "The file is larger than 50 MB")
+    try:
+        result = import_data(runtime.db, runtime.registry, json.loads(raw))
+    except (ValueError, TransferError) as exc:  # json.JSONDecodeError is a ValueError
+        message = str(exc) if isinstance(exc, TransferError) else "The file is not valid JSON"
+        raise HTTPException(422, message) from None
+    return settings_view(request, imported=result)
 
 
 @router.post("/settings", dependencies=[Depends(protected)])
@@ -109,7 +140,6 @@ async def read_alert(request: Request, alert_id: int):
 
 @router.post("/alerts/{alert_id}/retry", dependencies=[Depends(protected)])
 async def retry_notification(request: Request, alert_id: int):
-    from app.schemas.domain import now
 
     runtime = request.app.state.runtime
     with runtime.db.session() as session:

@@ -112,6 +112,19 @@ docker compose up -d
 
 The old files are retained in `pre-restore-*` for rollback. Migrations run against the restored database on startup. A backup from a newer schema may require its matching application version.
 
+### Move a watchlist between installations
+
+Settings → **Move your watchlist** → **Export watchlist** downloads one JSON file with your products, their links (with current price and stock), price history and store price rules. It does not include Activity events or settings that hold secrets (ntfy token, proxy).
+
+On the other installation, Settings → **Import** that file. Import only adds what is missing and never changes what exists:
+
+- products are matched by a permanent id carried in the file; a product that already exists is left exactly as it is;
+- a link is added to a product unless that product already has it (same store, link, condition and seller);
+- a price history entry is added unless that link already has one at the same moment;
+- a store price rule is added unless that store already has one.
+
+Importing the same file twice, or into the database it came from, reports "Nothing new to add" and changes nothing. Links in the file pass the same checks as pasted links; a link that would not be accepted is skipped and listed. Imported links are checked again shortly after the import. A file imports completely or not at all.
+
 ## Browser fallback
 
 The standard image includes pinned Playwright and its matching **full Chromium**, including Linux libraries (KuantoKusta refuses the lighter headless shell, which is not installed). Playwright's video encoder (ffmpeg) is removed after install; nothing records video. No browser software is needed on the host. Other browser engines are omitted to keep the image smaller.

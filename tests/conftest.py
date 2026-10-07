@@ -20,6 +20,9 @@ URLS = {
     "radiopopular": "https://www.radiopopular.pt/produto/tv-tcl-85c7k",
     "amazon_es": "https://www.amazon.es/dp/B012345678",
 }
+# Pages of stores without a dedicated adapter, keyed by full URL; an int under a bare host
+# answers every request to that host with that status.
+GENERIC_PAGES: dict[str, str | int] = {}
 
 
 @pytest.fixture
@@ -54,6 +57,7 @@ def candidate(snapshot):
 
 @pytest.fixture
 def site(db, tmp_path):
+    GENERIC_PAGES.clear()
     app = create_app(Config(data_dir=tmp_path, scheduler_enabled=False), database=db)
     runtime = app.state.runtime
     runtime.fetcher.min_delay = 0
@@ -64,6 +68,12 @@ def site(db, tmp_path):
     def respond(request):
         requests.append(str(request.url))
         host = request.url.host
+        if isinstance(status := GENERIC_PAGES.get(host), int):
+            return httpx.Response(status)
+        if isinstance(page := GENERIC_PAGES.get(str(request.url)), str):
+            return httpx.Response(200, text=page)
+        if not any(host in url for url in URLS.values()):
+            return httpx.Response(404)
         retailer = next(name for name, url in URLS.items() if host in url)
         if request.url.path == "/worten-api/search-products":
             return httpx.Response(

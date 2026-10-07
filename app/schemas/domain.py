@@ -29,6 +29,12 @@ class Identity(BaseModel):
     identifiers: dict[str, str] = Field(default_factory=dict)
 
 
+class PriceCandidate(BaseModel):
+    selector: str
+    price: Decimal
+    text: str
+
+
 class Snapshot(BaseModel):
     retailer: str
     url: str
@@ -42,6 +48,8 @@ class Snapshot(BaseModel):
     condition: Condition = Condition.UNKNOWN
     seller: str | None = None
     observed_at: datetime = Field(default_factory=now)
+    method: str = "structured"
+    alternatives: list[PriceCandidate] = Field(default_factory=list)
 
     @field_validator("price", "original_price")
     @classmethod
@@ -49,12 +57,6 @@ class Snapshot(BaseModel):
         if value is not None and (not value.is_finite() or value <= 0):
             raise ValueError("Price must be a positive finite amount")
         return value.quantize(Decimal("0.01")) if value is not None else None
-
-
-class PriceCandidate(BaseModel):
-    selector: str
-    price: Decimal
-    text: str
 
 
 class Match(BaseModel):

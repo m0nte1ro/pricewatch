@@ -4,11 +4,14 @@ import socket
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import islice
+from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup, Tag
 
-from app.retailers.parsing import availability, money, text_at
-from app.schemas.domain import PriceCandidate
+from app.retailers.base import RetailerAdapter
+from app.retailers.parsing import ScrapeError, availability, condition, money, text_at
+from app.schemas.domain import Condition, Identity, PriceCandidate, Snapshot
+from app.services.matching import identify
 
 PRICE_HINT = re.compile(r"price|pre[cç]o|valor|amount", re.I)
 OLD_HINT = re.compile(
@@ -40,7 +43,10 @@ CURRENCY_MARK = re.compile(r"[€$£]|EUR|GBP|USD", re.I)
 # Exact vocabulary only: parsing.availability() matches substrings, and "in stock" is inside
 # Spanish "sin stock".
 META_STOCK = {
-    **dict.fromkeys(("instock", "in stock", "in_stock", "available"), "in_stock"),
+    **dict.fromkeys(
+        ("instock", "in stock", "in_stock", "available", "limitedavailability", "onlineonly"),
+        "in_stock",
+    ),
     **dict.fromkeys(
         (
             "oos",
@@ -53,7 +59,7 @@ META_STOCK = {
         ),
         "out_of_stock",
     ),
-    **dict.fromkeys(("preorder", "pre-order", "backorder"), "preorder"),
+    **dict.fromkeys(("preorder", "pre-order", "presale", "backorder"), "preorder"),
 }
 
 
@@ -255,3 +261,54 @@ def read_heuristic(soup: BeautifulSoup) -> Reading:
         method="heuristic",
         alternatives=candidates,
     )
+
+
+class GenericAdapter(RetailerAdapter):
+    status = "generic"
+    status_note = "Generic reader: structured data, meta tags, then heuristics. Confirm the price once per store to teach it the right element."
+    product_pattern = r"^/.+"
+    default_condition = Condition.NEW
+
+    def __init__(self, fetcher, host: str, rules=None):
+        super().__init__(fetcher)
+        self.name = self.label = host
+        self.hosts = (host, "www." + host)
+        self.rules = rules
+
+    def normalize_url(self, url: str) -> str:
+        # Unknown stores may serve a product on only one of www and the bare host, so keep the
+        # one that was pasted instead of picking hosts[0] like the dedicated adapters.
+        normalized = urlsplit(super().normalize_url(url))
+        return urlunsplit(normalized._replace(netloc=urlsplit(url.strip()).hostname))
+
+    async def search_product(self, identity: Identity) -> list[str]:
+        return []
+
+    def parse(self, html: str, url: str) -> list[Snapshot]:
+        soup = BeautifulSoup(html, "html.parser")
+        try:
+            snapshot = super().parse(html, url)[0]
+        except ScrapeError:
+            snapshot = self.snapshot(read_meta(soup) or read_heuristic(soup), soup, url)
+        # A heuristic reading already holds the page's candidates.
+        if snapshot.method != "heuristic":
+            snapshot.alternatives = price_candidates(soup)
+        return [snapshot]
+
+    def snapshot(self, reading: Reading, soup: BeautifulSoup, url: str) -> Snapshot:
+        if not reading.title:
+            raise ScrapeError("No product title found; is this a product page?")
+        found = condition(reading.title)
+        return Snapshot(
+            retailer=self.name,
+            url=self.normalize_url(url),
+            retailer_product_id=text_at(soup, '[itemprop="sku"]') or None,
+            identity=identify(reading.title),
+            title=reading.title,
+            price=reading.price,
+            currency=reading.currency,
+            availability=reading.availability,
+            condition=self.default_condition if found == Condition.UNKNOWN else found,
+            method=reading.method,
+            alternatives=reading.alternatives,
+        )

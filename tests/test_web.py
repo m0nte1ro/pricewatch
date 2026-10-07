@@ -1,11 +1,16 @@
 import time
 from datetime import timedelta
+from decimal import Decimal
 
+import pytest
 from sqlalchemy import func, select
 
-from app.models import DiscoveryDraft, Listing, Product, RetailerState
+from app.models import DiscoveryDraft, Listing, PriceHistory, Product, RetailerState
 from app.schemas.domain import now
-from tests.conftest import URLS
+from tests.conftest import GENERIC_PAGES, URLS
+
+STORE_PAGE = """<html><head><title>TV TCL 85C7K | Store One</title></head><body><main class="product">
+<h1>TV TCL 85C7K MiniLED 85"</h1><span class="price-current">1.299,99 €</span><div class="stock">Em stock</div></main></body></html>"""
 
 
 def payload(name="TCL 85C7K", urls=None):
@@ -229,16 +234,15 @@ def test_restart_lifts_cooldowns(site):
         assert session.get(RetailerState, "worten").blocked_until is None
 
 
-def test_unsupported_store_link_is_reported_without_discarding_the_others(site):
-    client, _, _, requests = site
+def test_unreachable_store_link_is_reported_without_discarding_the_others(site):
+    client, _, _, _ = site
     _, page = discover(
         client,
         urls=[URLS["worten"], "https://www.pcdiga.com/tv-tcl-85c7k", URLS["darty"] + "?ref=mine"],
     )
-    assert "Manual URL (www.pcdiga.com): Unsupported retailer URL" in page.text
+    assert "Manual URL (www.pcdiga.com): HTTP 404" in page.text
     assert '<details class="panel warnings" open>' in page.text
     assert page.text.count("discovered + manual") == 2
-    assert not any("pcdiga" in r for r in requests)
 
 
 def test_listing_interval_override(site):
@@ -266,3 +270,116 @@ def test_listing_interval_override(site):
     with runtime.db.session() as session:
         assert session.get(Listing, listing_id).check_interval_minutes is None
     assert 'name="minutes"' in client.get(product_path).text
+
+
+async def test_generic_link_is_monitored(site):
+    client, runtime, _, _ = site
+    url = "https://www.storeone.pt/produto/tcl-85c7k"
+    GENERIC_PAGES[url] = STORE_PAGE
+    path, page = discover(client, name="TCL 85C7K", urls=[url + "?utm_source=x"], retailers=[])
+    assert "storeone.pt" in page.text and "1299.99" in page.text
+    product_path = client.post(
+        path + "/confirm", data=form_data(client, selected=["0"]), follow_redirects=False
+    ).headers["location"]
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert (listing.retailer, listing.url, listing.condition) == ("storeone.pt", url, "new")
+        assert (listing.current_price, listing.availability, listing.extraction_method) == (
+            Decimal("1299.99"),
+            "in_stock",
+            "heuristic",
+        )
+        listing.next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(PriceHistory)) == 2
+        assert session.scalar(select(Listing)).last_error is None
+    assert "storeone.pt" in client.get(product_path).text
+
+
+def test_generic_store_key_and_url_variants_dedupe(site):
+    client, runtime, _, _ = site
+    GENERIC_PAGES["https://www.storeone.pt/produto/tcl-85c7k"] = STORE_PAGE
+    GENERIC_PAGES["https://storeone.pt/produto/tcl-85c7k"] = STORE_PAGE
+    path, page = discover(
+        client,
+        name="TCL 85C7K",
+        retailers=[],
+        urls=[
+            "https://www.storeone.pt/produto/tcl-85c7k#reviews",
+            "https://www.storeone.pt/produto/tcl-85c7k?gclid=1",
+            "https://storeone.pt/produto/tcl-85c7k",
+        ],
+    )
+    assert page.text.count('name="selected"') == 1
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    with runtime.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 1
+        assert session.scalar(select(Listing)).retailer == "storeone.pt"
+
+
+def test_http_link_is_rejected_at_the_form(site):
+    client, _, _, _ = site
+    response = client.post(
+        "/discoveries",
+        data=form_data(client, name="TV", urls=["http://www.storeone.pt/p"], retailers=[]),
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://192.168.1.10/produto/x",
+        "https://localhost/produto/x",
+        "https://nas/produto/x",
+        "https://printer.local/p",
+    ],
+)
+def test_non_public_links_become_notes_and_are_never_requested(site, url):
+    client, _, _, requests = site
+    _, page = discover(client, name="TCL 85C7K", urls=[url], retailers=[])
+    assert "Only public https:// store links can be monitored" in page.text
+    assert not any(url.split("/")[2] in r for r in requests)
+
+
+async def test_generic_cooldowns_are_per_host(site):
+    client, runtime, _, _ = site
+    GENERIC_PAGES["https://www.storeone.pt/p/a"] = STORE_PAGE
+    GENERIC_PAGES["https://www.storetwo.pt/p/a"] = STORE_PAGE.replace("Store One", "Store Two")
+    path, _ = discover(
+        client,
+        name="TCL 85C7K",
+        urls=["https://www.storeone.pt/p/a", "https://www.storetwo.pt/p/a"],
+        retailers=[],
+    )
+    client.post(path + "/confirm", data=form_data(client, selected=["0", "1"]))
+    GENERIC_PAGES["www.storeone.pt"] = 403
+    with runtime.db.session() as session:
+        for listing in session.scalars(select(Listing)):
+            listing.next_check_at = now() - timedelta(minutes=1)
+    await runtime.monitor.run()
+    with runtime.db.session() as session:
+        rows = {x.retailer: x for x in session.scalars(select(Listing))}
+        assert rows["storeone.pt"].last_error and rows["storetwo.pt"].last_error is None
+        assert session.get(RetailerState, "storeone.pt").blocked_until is not None
+        assert session.get(RetailerState, "storetwo.pt").blocked_until is None
+
+
+def test_generic_page_without_price_is_kept_and_flagged(site):
+    client, runtime, _, _ = site
+    GENERIC_PAGES["https://www.storeone.pt/p/js"] = (
+        "<html><head><title>TV TCL 85C7K | Store One</title></head><body><div id=app></div></body></html>"
+    )
+    path, page = discover(
+        client, name="TCL 85C7K", urls=["https://www.storeone.pt/p/js"], retailers=[]
+    )
+    assert 'name="selected"' in page.text
+    client.post(path + "/confirm", data=form_data(client, selected=["0"]))
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        assert (listing.current_price, listing.availability, listing.extraction_method) == (
+            None,
+            "unknown",
+            "heuristic",
+        )

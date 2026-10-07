@@ -21,7 +21,7 @@ def render(request: Request, template: str, **context):
         name=template,
         context={
             "csrf": request.state.csrf,
-            "retailers": request.app.state.runtime.registry.adapters,
+            "retailers": request.app.state.runtime.registry,
             "conditions": [str(c) for c in Condition],
             **context,
         },

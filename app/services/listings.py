@@ -33,6 +33,7 @@ def record_snapshot(
     listing.original_price = snapshot.original_price
     listing.currency = snapshot.currency
     listing.availability = snapshot.availability
+    listing.extraction_method = snapshot.method
     listing.title = snapshot.title
     listing.last_seen_at = snapshot.observed_at
     listing.last_checked_at = now()

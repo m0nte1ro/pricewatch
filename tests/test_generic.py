@@ -4,6 +4,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from app.retailers.generic import (
+    GenericAdapter,
     css_path,
     currency_of,
     heuristic_availability,
@@ -14,6 +15,9 @@ from app.retailers.generic import (
     read_meta,
     store_key,
 )
+from app.retailers.http import Fetcher
+from app.retailers.parsing import ScrapeError
+from app.retailers.registry import Registry
 
 
 def soup(html):
@@ -222,6 +226,9 @@ def test_meta_availability_is_never_replaced_by_the_cart_button(value, expected)
         (" InStock ", "in_stock"),
         ("https://schema.org/SoldOut", "out_of_stock"),
         ("pre-order", "preorder"),
+        ("https://schema.org/LimitedAvailability", "in_stock"),
+        ("OnlineOnly", "in_stock"),
+        ("PreSale", "preorder"),
     ],
 )
 def test_meta_availability_vocabulary(value, expected):
@@ -231,3 +238,72 @@ def test_meta_availability_vocabulary(value, expected):
 
 def test_meta_without_availability_tag_falls_back_to_the_page():
     assert read_meta(soup(f"{META_PRICE}<button>Comprar</button>")).availability == "in_stock"
+
+
+def test_registry_resolves_known_and_generic():
+    registry = Registry(Fetcher(None, None))
+    assert registry.for_url("https://www.worten.pt/produtos/x-1").name == "worten"
+    adapter = registry.for_url("https://www.pcdiga.com/tv-tcl-85c7k")
+    assert (adapter.name, adapter.label, adapter.hosts) == (
+        "pcdiga.com",
+        "pcdiga.com",
+        ("pcdiga.com", "www.pcdiga.com"),
+    )
+    assert registry["pcdiga.com"] is adapter and registry.for_url("https://pcdiga.com/x") is adapter
+    assert dict(registry.items()).keys() == registry.adapters.keys()
+    with pytest.raises(ScrapeError):
+        registry.for_url("https://127.0.0.1/x")
+    assert (
+        adapter.normalize_url("https://www.pcdiga.com/tv//tcl/?utm_source=a&b=1#x")
+        == "https://www.pcdiga.com/tv/tcl?b=1"
+    )
+
+
+def test_generic_url_keeps_the_pasted_host_lowercased():
+    adapter = Registry(Fetcher(None, None)).for_url("https://PCDiga.com/TV/")
+    assert adapter.normalize_url("https://PCDiga.com/TV/") == "https://pcdiga.com/TV"
+
+
+def test_registry_rejects_links_without_a_host():
+    with pytest.raises(ScrapeError, match="Enter a full https:// link"):
+        Registry(Fetcher(None, None)).for_url("https:///produto/x")
+
+
+def test_generic_parse_tiers():
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt")
+    heuristic = adapter.parse(HEURISTIC_PAGE, "https://www.storeone.pt/p")[0]
+    assert (heuristic.method, heuristic.price, heuristic.condition, heuristic.identity.model) == (
+        "heuristic",
+        Decimal("1299.99"),
+        "new",
+        "85C7K",
+    )
+    assert len(heuristic.alternatives) == 3
+    meta = adapter.parse("<title>TCL 85C7K</title>" + META_PAGE, "https://www.storeone.pt/p")[0]
+    assert (meta.method, meta.price) == ("meta", Decimal("1299.99"))
+    structured = adapter.parse(
+        '<h1>TCL 85C7K</h1><script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"price":"1199.00","priceCurrency":"EUR","availability":"https://schema.org/InStock"}}</script>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (structured.method, structured.price, structured.availability) == (
+        "structured",
+        Decimal("1199.00"),
+        "in_stock",
+    )
+    with pytest.raises(ScrapeError):
+        adapter.parse("<html><body><div id=app></div></body></html>", "https://www.storeone.pt/p")
+
+
+def test_structured_data_is_read_without_a_title_element():
+    adapter = GenericAdapter(Fetcher(None, None), "storeone.pt")
+    snapshot = adapter.parse(
+        '<script type="application/ld+json">{"@type":"Product","name":"TCL 85C7K",'
+        '"offers":{"price":"1199.00","priceCurrency":"EUR"}}</script>',
+        "https://www.storeone.pt/p",
+    )[0]
+    assert (snapshot.method, snapshot.title, snapshot.price) == (
+        "structured",
+        "TCL 85C7K",
+        Decimal("1199.00"),
+    )

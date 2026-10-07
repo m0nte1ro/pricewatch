@@ -30,6 +30,8 @@ class MonitoringService:
             return
         async with self.lock:
             prefs = self.settings.get()
+            # Generic stores have no switch in Settings, so only known stores can be disabled.
+            disabled = [n for n in self.registry.adapters if n not in prefs.enabled_retailers]
             with self.db.session() as session:
                 query = (
                     select(Listing.id, Listing.retailer)
@@ -38,9 +40,10 @@ class MonitoringService:
                         Listing.enabled.is_(True),
                         Product.enabled.is_(True),
                         Product.archived.is_(False),
-                        Listing.retailer.in_(prefs.enabled_retailers),
                     )
                 )
+                if disabled:
+                    query = query.where(Listing.retailer.not_in(disabled))
                 if product_id is not None:
                     query = query.where(Product.id == product_id)
                 if not force:
@@ -77,7 +80,7 @@ class MonitoringService:
             )
         error, snapshot = None, None
         try:
-            snapshots = await self.registry.adapters[listing.retailer].fetch_listing(listing.url)
+            snapshots = await self.registry[listing.retailer].fetch_listing(listing.url)
             snapshot = next(
                 (
                     s

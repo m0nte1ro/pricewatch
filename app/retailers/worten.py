@@ -1,12 +1,16 @@
 import json
+import re
+from decimal import Decimal
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 from app.retailers.base import RetailerAdapter
-from app.retailers.parsing import ScrapeError
+from app.retailers.parsing import ScrapeError, money, text_at
 from app.schemas.domain import Snapshot
 from app.services.matching import normalize
+
+COUPON_FLAG = re.compile(r"-\s*(\d{1,2})\s*%\s*c/\s*cup[ãa]o\s+([A-Z0-9]+)", re.I)
 
 
 class WortenAdapter(RetailerAdapter):
@@ -23,9 +27,36 @@ class WortenAdapter(RetailerAdapter):
 
     def parse(self, html: str, url: str) -> list[Snapshot]:
         snapshots = super().parse(html, url)
+        soup = BeautifulSoup(html, "html.parser")
+        # "Preço com cupão: 1.999,20 · Aplica o cupão TCL20" beside the shelf price. Worten's
+        # server usually sends only the "-20% c/ cupão TCL20" flag and its page script works
+        # the price out; do the same, taking the biggest coupon on the product's own page.
+        # Store-credit flags ("10% extra em talão") are not a lower price.
+        coupon = soup.select_one(".product-price-info .price-with-coupon")
+        shown = money(text_at(coupon, '[itemprop="price"]')) if coupon else None
+        shown_code = (
+            re.search(r"cup[ãa]o\s+([A-Z0-9]+)", coupon.get_text(" "), re.I) if coupon else None
+        )
+        flags = [
+            (int(m.group(1)), m.group(2).upper())
+            for flag in soup.select(".flags-attached [aria-label]")
+            if (m := COUPON_FLAG.search(flag["aria-label"]))
+        ]
+        for snapshot in snapshots:
+            if snapshot.price is None:
+                continue
+            if shown is not None:
+                price, code = shown, shown_code.group(1).upper() if shown_code else None
+            elif flags:
+                percent, code = max(flags)
+                price = (snapshot.price * (100 - percent) / 100).quantize(Decimal("0.01"))
+            else:
+                continue
+            if price < snapshot.price:
+                snapshot.promo_price, snapshot.promo_code = price, code
         # Worten's JSON-LD keeps saying InStock for listings that cannot be bought; the
         # server-rendered buy box is authoritative ("--unavailability", no cart button).
-        box = BeautifulSoup(html, "html.parser").select_one(".add-to-cart--buy-box")
+        box = soup.select_one(".add-to-cart--buy-box")
         if box is not None:
             buyable = "add-to-cart--unavailability" not in box.get("class", []) and box.select_one(
                 "button"

@@ -407,3 +407,39 @@ async def test_kuantokusta_is_read_through_the_browser():
     listing = (await adapter.fetch_listing(KK_URL + "?queryId=x"))[0]
     assert pages == [(KK_URL, "kuantokusta")]
     assert listing.price == Decimal("1748.18")
+
+
+WORTEN_85C7L = (
+    "https://www.worten.pt/produtos/tv-tcl-85c7l-sqd-miniled-85-216-cm-4k-ultra-hd-smart-tv-8846682"
+)
+
+
+def test_worten_reads_the_coupon_price_it_shows(registry):
+    # "Preço com cupão: 1.999,20 · Aplica o cupão TCL20" next to the 2.499,00 shelf price.
+    page = (FIXTURES / "worten_85c7l_coupon.html").read_text()
+    listing = registry.adapters["worten"].parse(page, WORTEN_85C7L)[0]
+    assert listing.price == Decimal("2499.00")
+    assert (listing.promo_price, listing.promo_code) == (Decimal("1999.20"), "TCL20")
+    assert listing.deal_price == Decimal("1999.20")
+    assert (listing.availability, listing.seller) == ("in_stock", "Worten")
+
+
+def test_worten_works_out_the_coupon_price_from_its_flag(registry):
+    # Worten's server sends only the "-20% c/ cupão TCL20" flag; its page script shows
+    # 2.499,00 × 0.8 = 1.999,20. The biggest coupon wins (HOTDAYS is -10%).
+    page = (FIXTURES / "worten_85c7l_coupon.html").read_text()
+    start = page.index('<div class="price-with-coupon">')
+    end = page.index('<div class="product-price-info__seller--inline')
+    listing = registry.adapters["worten"].parse(page[:start] + page[end:], WORTEN_85C7L)[0]
+    assert (listing.promo_price, listing.promo_code) == (Decimal("1999.20"), "TCL20")
+
+
+def test_worten_store_credit_flags_are_not_a_price(registry):
+    page = (FIXTURES / "worten_85c7l_coupon.html").read_text()
+    start = page.index('<div class="price-with-coupon">')
+    end = page.index('<div class="product-price-info__seller--inline')
+    page = page[:start] + page[end:]
+    for coupon in ("-20% c/ cupão TCL20", "-10% c/ cupão HOTDAYS"):
+        page = page.replace(coupon, "Envio grátis")
+    listing = registry.adapters["worten"].parse(page, WORTEN_85C7L)[0]
+    assert (listing.promo_price, listing.promo_code) == (None, None)  # "10% extra em talão" stays

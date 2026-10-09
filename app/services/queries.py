@@ -19,7 +19,7 @@ DEAL = case(
 )
 
 
-def summary(product: Product, low: Decimal | None = None) -> dict:
+def summary(product: Product, low: Decimal | None = None, high: Decimal | None = None) -> dict:
     active = [x for x in product.listings if x.enabled]
     eligible = [
         x
@@ -60,6 +60,9 @@ def summary(product: Product, low: Decimal | None = None) -> dict:
         "best": best,
         "unavailable": None if best else unavailable,
         "low": low,
+        # Only news once the price has been higher: a first reading is trivially the lowest.
+        "at_low": bool(best and low is not None and high is not None and high > low)
+        and best.deal_price <= low,
         "status": status,
         "active_count": len(active),
         "last_checked": max((x.last_checked_at for x in active if x.last_checked_at), default=None),
@@ -78,15 +81,16 @@ class QueryService:
                 .where(Product.archived == archived)
                 .order_by(Product.created_at.desc())
             ).all()
-            lows = dict(
-                session.execute(
-                    select(Listing.product_id, func.min(DEAL))
+            ranges = {
+                product_id: (low, high)
+                for product_id, low, high in session.execute(
+                    select(Listing.product_id, func.min(DEAL), func.max(DEAL))
                     .join(PriceHistory)
                     .where(*CONFIRMED_EUR)
                     .group_by(Listing.product_id)
-                ).all()
-            )
-            return [summary(product, lows.get(product.id)) for product in products]
+                )
+            }
+            return [summary(product, *ranges.get(product.id, ())) for product in products]
 
     def detail(self, product_id: int) -> dict | None:
         with self.db.session() as session:
@@ -108,7 +112,7 @@ class QueryService:
                 .order_by(PriceHistory.timestamp)
                 .limit(1)
             )
-            result = summary(product, low)
+            result = summary(product, low, high)
             result["listing_urls"] = {x.id: x.url for x in product.listings}
             low_time = session.scalar(
                 select(func.max(PriceHistory.timestamp)).join(Listing).where(*eligible, DEAL == low)

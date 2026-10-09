@@ -1079,3 +1079,37 @@ def test_export_and_import_through_settings(site):
     bad = {"file": ("x.json", b"not json", "application/json")}
     assert client.post("/import", data=form_data(client), files=bad).status_code == 422
     assert 'action="/import"' in client.get("/settings").text
+
+
+def test_the_whole_card_opens_the_product(site):
+    client, _, _, _ = site
+    product_path = saved_product(client)
+    card = client.get("/").text.split('class="product-card"')[1]
+    assert f'class="product-name card-link" href="{product_path}"' in card
+    assert 'aria-label="View' not in card
+
+
+def test_card_says_all_time_low_once_the_price_has_been_higher(site):
+    client, runtime, _, _ = site
+    saved_product(client)
+
+    def card():
+        return client.get("/").text.split('class="product-card"')[1]
+
+    # A single reading is trivially the lowest; that is not news.
+    assert "All-time low!" not in card()
+    with runtime.db.session() as session:
+        listing = session.scalar(select(Listing))
+        session.add(
+            PriceHistory(
+                listing_id=listing.id,
+                timestamp=now() - timedelta(days=3),
+                price=Decimal("1299.00"),
+                availability="in_stock",
+                condition="new",
+            )
+        )
+    assert '<span class="badge all-time-low">All-time low!</span>' in card()
+    with runtime.db.session() as session:
+        session.scalar(select(Listing)).current_price = Decimal("1250.00")
+    assert "All-time low!" not in card()

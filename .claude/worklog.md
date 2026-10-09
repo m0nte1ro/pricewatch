@@ -3,13 +3,14 @@
 ## Where things stand
 _Updated 2026-10-09_
 
-- **Branch / state:** `main`, in sync with `origin/main` (head `ad1dc02`), clean working tree. `link-aggregation` was merged via PR #1; the local branch still exists (fully merged, safe to delete). 274 tests pass, ruff and `alembic check` clean.
+- **Branch / state:** `main`, in sync with `origin/main` (head `636bd76`, the user's worklog commit), clean apart from this log. 278 tests pass, ruff and `alembic check` clean. Local and remote `link-aggregation` branches are fully merged, safe to delete.
 - **Next steps:**
-  1. The user rebuilds the local container (`docker compose up -d --build`); it is several commits behind and the migrations (`95b1e4bc7bfc`, `136c811fa067`, `9c429652d1ff`, `cfa384c596df`) apply on start.
+  1. The user rebuilds the local container (`docker compose up -d --build`); migrations `95b1e4bc7bfc`, `136c811fa067`, `9c429652d1ff`, `cfa384c596df` and today's `2c6d2944b736` (saved page column) apply on start.
   2. Local Settings → Export watchlist → move the file to the CT.
   3. CT (Debian trixie, Proxmox, 2 vCPU / 2 GB / 16 GB, nesting + keyctl on): install Docker from the official repo, clone `main` to `/opt/pricewatch`, `docker compose up -d --build`, Settings → Import.
-  4. Docs out of date: `docs/superpowers/standards.md` and `orchestration.md` still describe the branch-per-plan workflow and a Fable trailer; the spec still mentions condition-gated alerts (removed). Update or mark as historical.
+  4. Docs out of date: `docs/superpowers/standards.md` (Fable trailer; "no browser on 403" contradicts KuantoKusta) and `orchestration.md` (work on a branch, contradicts stay-on-`main`); spec decision 11 likewise. Update or mark as historical.
 - **Open questions / decisions pending:**
+  - The user said "save the HTML and what not": built the HTML copy; a screen-sized JPEG screenshot on new lows (also attachable to ntfy) is offered on top, not confirmed.
   - Offered, not answered: a "Send to pricewatch" bookmarklet for stores that block scripts.
   - PCDiga, PowerPlanet and El Corte Inglés could be read through `Fetcher.browse` (a live test returned 200 with prices for all three). The user chose KuantoKusta instead; not wired up for those stores.
   - Parked final-review edges, not fixed: C1 wrapper bypass on stock rules; `NOISE_HINT` too broad (WooCommerce/Magento body classes → stock unknown); sold-out text anywhere → false "became unavailable" pushes. Listed in the merged PR's history.
@@ -21,23 +22,39 @@ _Updated 2026-10-09_
   - Promo-code/coupon prices count as the price to pay.
   - Approved reading blocked stores with a real browser ("do it"); never solve CAPTCHAs.
   - Import must be immutable: importing the same file twice changes nothing.
+  - Dashboard cards: the whole card opens the product; an at-all-time-low card says so.
 - **Tried and dropped:**
   - Headless shell or default headless Chromium against Cloudflare/Akamai: blocked. Only full Chromium, current headless mode, automation flag off, normal UA works.
   - Darty's Shopify `.js` product JSON: 429 like the pages. KuantoKusta search: 403.
   - Worten `feature-price-with-coupon` cookie: the server still doesn't render the coupon block; the price is derived from the "-N% c/ cupão CODE" flag.
   - The generic microdata reader on Rádio Popular: it picks the "similar products" carousel; a header-based reader replaced it.
+  - Wrapping the dashboard card in one `<a>`: it holds other links and a form (nested links are invalid); a stretched link on the product name is used instead.
 - **Watch out for:**
   - Claude Code's permission classifier blocks anti-bot browser code unless the user explicitly authorises it in the conversation.
   - `docker compose down -v` does not clear `./data` (bind directory, owned by UID 10001).
   - `pkill -f` patterns can match the container's uvicorn; track scratch servers by PID.
   - Live probes: one request at a time. Bursts got Darty (429), FNAC and KuantoKusta (403) to block this IP.
+  - Scratch Playwright checks: route-block non-local requests on every page and popup; clicking a store link or Check now on seeded data hits the real store (happened today: three single loads of `worten.pt/x`).
+  - Saved store pages are third-party HTML: keep them behind the `Content-Security-Policy: sandbox` route (`app/web/products.py`, `saved_page`), never rendered inline.
   - Local Playwright Chromium (full + shell + ffmpeg) is in `~/.cache/ms-playwright`; the user installed its system libraries.
 - **Relevant docs:**
-  - `README.md`: retailer coverage table (Rádio Popular, KuantoKusta, Worten coupons), "Move a watchlist between installations", promo prices, 429/"not read yet" behaviour.
+  - `README.md`: "Checks, history and alerts" (All-time low badge, Saved pages), retailer coverage, "Move a watchlist between installations".
+  - `docs/superpowers/standards.md`, `orchestration.md`: the out-of-date docs in next step 4.
   - `.claude/CLAUDE.md`: the user's working rules.
-  - `tests/fixtures/README.md`: provenance of the live fixtures added this week.
 
 ## Log
+
+### 2026-10-09
+- **Did:**
+  - Dashboard cards open the product from anywhere (stretched link; store links and Check now stay on top; ↗ arrow removed).
+  - "All-time low!" badge on a card when the best price equals the history low and the price has been higher before.
+  - New all-time lows keep the fetched page HTML (gzipped, `PriceHistory.page`, deferred), linked from the card and the product page, served sandboxed with a `<base>` and a "Saved by pricewatch" banner. Verified in Playwright: clicks, badge, banner, planted script did not run.
+- **Decided:**
+  - A first reading is never an all-time low (badge or saved page), because it is trivially the lowest.
+  - Pages are saved only on strict new lows and only from the HTML the check already fetched, because extra store requests risk throttling.
+  - Pages live in SQLite with their history row (backups include them, export does not, listing removal deletes them), because there is no file cleanup to manage.
+- **Commits:** `0bee919` feat: open a product from anywhere on its card; flag all-time lows; `279bece` feat: keep the store's page when a check finds a new all-time low; the user's `636bd76` worklog.
+- **Left open:** screenshot on top of the HTML copy; container rebuild and CT move; out-of-date docs.
 
 ### 2026-10-07
 - **Did:**

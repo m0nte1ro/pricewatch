@@ -70,6 +70,28 @@ def summary(product: Product, low: Decimal | None = None, high: Decimal | None =
     }
 
 
+def low_pages(session, product_id: int | None = None) -> dict[int, int]:
+    """The latest saved page showing each product's all-time low, by product id."""
+    lows = (
+        select(Listing.product_id, func.min(DEAL).label("low"))
+        .join(PriceHistory)
+        .where(*CONFIRMED_EUR)
+        .group_by(Listing.product_id)
+    )
+    if product_id is not None:
+        lows = lows.where(Listing.product_id == product_id)
+    lows = lows.subquery()
+    return dict(
+        session.execute(
+            select(Listing.product_id, func.max(PriceHistory.id))
+            .join(PriceHistory)
+            .join(lows, lows.c.product_id == Listing.product_id)
+            .where(*CONFIRMED_EUR, PriceHistory.page.is_not(None), DEAL == lows.c.low)
+            .group_by(Listing.product_id)
+        ).all()
+    )
+
+
 class QueryService:
     def __init__(self, db):
         self.db = db
@@ -90,7 +112,11 @@ class QueryService:
                     .group_by(Listing.product_id)
                 )
             }
-            return [summary(product, *ranges.get(product.id, ())) for product in products]
+            pages = low_pages(session)
+            return [
+                summary(product, *ranges.get(product.id, ())) | {"low_page": pages.get(product.id)}
+                for product in products
+            ]
 
     def detail(self, product_id: int) -> dict | None:
         with self.db.session() as session:
@@ -118,6 +144,7 @@ class QueryService:
                 select(func.max(PriceHistory.timestamp)).join(Listing).where(*eligible, DEAL == low)
             )
             result.update(
+                low_page=low_pages(session, product_id).get(product_id),
                 high=high,
                 first=first,
                 days_since_low=(now() - low_time).days if low_time else None,

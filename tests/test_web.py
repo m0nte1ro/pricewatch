@@ -1113,3 +1113,45 @@ def test_card_says_all_time_low_once_the_price_has_been_higher(site):
     with runtime.db.session() as session:
         session.scalar(select(Listing)).current_price = Decimal("1250.00")
     assert "All-time low!" not in card()
+
+
+async def test_a_new_all_time_low_keeps_a_copy_of_the_page(site):
+    client, runtime, prices, _ = site
+    product_path = saved_product(client)
+
+    def pages():
+        with runtime.db.session() as session:
+            return session.scalars(
+                select(PriceHistory.id)
+                .where(PriceHistory.page.is_not(None))
+                .order_by(PriceHistory.id)
+            ).all()
+
+    await runtime.monitor.run(force=True)  # same price again: not a new low
+    assert pages() == []
+    prices["worten"] = "1099.00"
+    await runtime.monitor.run(force=True)
+    assert len(pages()) == 1
+    for price in ("1099.00", "1150.00"):  # equal and higher readings are not new lows
+        prices["worten"] = price
+        await runtime.monitor.run(force=True)
+    assert len(pages()) == 1
+    saved = f"/history/{pages()[0]}/page"
+    assert saved in client.get(product_path).text
+    assert saved in client.get("/").text.split('class="product-card"')[1]
+    response = client.get(saved)
+    assert response.status_code == 200
+    # Store HTML is shown with scripts off, in an origin of its own.
+    assert response.headers["content-security-policy"] == "sandbox"
+    assert f'<base href="{URLS["worten"]}">' in response.text
+    assert "Saved by pricewatch" in response.text and "€1,099.00" in response.text
+    assert '"price": "1099.00"' in response.text
+
+
+def test_a_reading_without_a_saved_page_has_none_to_show(site):
+    client, runtime, _, _ = site
+    saved_product(client)
+    with runtime.db.session() as session:
+        history_id = session.scalar(select(PriceHistory.id))
+    assert client.get(f"/history/{history_id}/page").status_code == 404
+    assert client.get("/history/999/page").status_code == 404

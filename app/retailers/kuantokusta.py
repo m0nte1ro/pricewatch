@@ -4,7 +4,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
-from app.retailers.base import RetailerAdapter
+from app.retailers.base import RetailerAdapter, with_page
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import Condition, Identity, Snapshot
 
@@ -33,7 +33,8 @@ class KuantoKustaAdapter(RetailerAdapter):
         url = self.normalize_url(url)
         if not self.is_product_url(url):
             raise ScrapeError("Use a KuantoKusta product page link (kuantokusta.pt/p/…)")
-        return self.parse(await self.fetcher.browse(url, self.name, self.hosts), url)
+        html = await self.fetcher.browse(url, self.name, self.hosts)
+        return with_page(self.parse(html, url), html)
 
     def parse(self, html: str, url: str) -> list[Snapshot]:
         data = BeautifulSoup(html, "html.parser").select_one("script#__NEXT_DATA__")

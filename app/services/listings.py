@@ -1,3 +1,4 @@
+import gzip
 import logging
 import random
 import re
@@ -5,7 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models import Listing, PriceHistory, Product
 from app.retailers.generic import GenericAdapter
@@ -14,6 +15,7 @@ from app.retailers.parsing import BlockedError, ScrapeError
 from app.schemas.domain import Candidate, Identity, Preferences, Snapshot, now
 from app.services.alerts import evaluate
 from app.services.matching import deduplicate, identify, match_identity, normalize
+from app.services.queries import CONFIRMED_EUR, DEAL
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +40,16 @@ def unread_snapshot(adapter, url: str) -> Snapshot:
     )
 
 
+def new_low(session, product: Product, snapshot: Snapshot) -> bool:
+    """Below every confirmed price on record; a first reading has nothing to beat."""
+    if snapshot.method == "heuristic" or snapshot.currency != "EUR" or not snapshot.deal_price:
+        return False
+    low = session.scalar(
+        select(func.min(DEAL)).join(Listing).where(Listing.product_id == product.id, *CONFIRMED_EUR)
+    )
+    return low is not None and snapshot.deal_price < low
+
+
 def record_snapshot(
     session, product: Product, listing: Listing, snapshot: Snapshot, *, initial: bool = False
 ):
@@ -56,6 +68,7 @@ def record_snapshot(
         listing.seller_key = normalize(snapshot.seller)
         listing.retailer_product_id = snapshot.retailer_product_id
     evaluate(session, product, listing, snapshot, initial=initial or first_read)
+    page = snapshot.page if snapshot.page and new_low(session, product, snapshot) else None
     session.add(
         PriceHistory(
             listing_id=listing.id,
@@ -66,6 +79,7 @@ def record_snapshot(
             currency=snapshot.currency,
             method=snapshot.method,
             promo_price=snapshot.promo_price,
+            page=gzip.compress(page.encode()) if page else None,
         )
     )
     if listing.current_price != snapshot.price:

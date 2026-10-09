@@ -62,6 +62,8 @@ class Snapshot(BaseModel):
     promo_code: str | None = None
     # For price-comparison pages: which store the price comes from, e.g. "Chipman · free shipping".
     offered_by: str | None = None
+    # The HTML this reading came from; never stored with drafts or exported.
+    page: str | None = Field(default=None, exclude=True, repr=False)
 
     @property
     def deal_price(self) -> Decimal | None:

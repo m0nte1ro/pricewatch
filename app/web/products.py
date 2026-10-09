@@ -1,16 +1,20 @@
+import gzip
+import re
 from datetime import timedelta
+from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import delete, update
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, undefer
 
 from app.models import Alert, Listing, PriceHistory, Product
 from app.retailers.http import user_waiting
 from app.retailers.parsing import ScrapeError
-from app.schemas.domain import now
+from app.schemas.domain import lower_price, now
 from app.services.listings import add_link, confirm_listing_price, verify_offer
 from app.web.common import (
+    TEMPLATES,
     amount,
     confirmed_price,
     full_https,
@@ -108,6 +112,45 @@ async def add_product_link(request: Request, product_id: int):
         raise HTTPException(422, str(exc)) from None
     runtime.spawn(runtime.notifications.deliver())
     return RedirectResponse(f"/products/{product_id}?added={added}", 303)
+
+
+BANNER = (
+    '<div style="all:initial;display:block;position:sticky;top:0;z-index:2147483647;'
+    "background:#10141b;color:#edf0f5;font:13px/1.5 system-ui,sans-serif;padding:10px 16px;"
+    'border-bottom:2px solid #a2eac8">Saved by pricewatch on {when}: {price} at {store}. '
+    "Scripts are off; images and styles load from the store as they are today. "
+    '<a href="{url}" target="_blank" style="color:#a2eac8">Open the live page ↗</a></div>'
+)
+
+
+@router.get("/history/{history_id}/page", response_class=HTMLResponse)
+async def saved_page(request: Request, history_id: int):
+    """The page as it was when it set a new all-time low."""
+    runtime = request.app.state.runtime
+    with runtime.db.session() as session:
+        row = session.get(PriceHistory, history_id, options=[undefer(PriceHistory.page)])
+        if row is None or row.page is None:
+            raise HTTPException(404, "No saved page for this reading")
+        listing = session.get(Listing, row.listing_id)
+        html = gzip.decompress(row.page).decode(errors="replace")
+        filters = TEMPLATES.env.filters
+        url = escape(listing.url)
+        banner = BANNER.format(
+            when=filters["date"](row.timestamp),
+            price=filters["money"](lower_price(row.price, row.promo_price)),
+            store=escape(runtime.registry[listing.retailer].label),
+            url=url,
+        )
+    # Relative links, images and styles resolve against the store, not pricewatch.
+    head = f'<base href="{url}">'
+    html, found = re.subn(r"<head\b[^>]*>", lambda m: m[0] + head, html, count=1, flags=re.I)
+    if not found:
+        html = head + html
+    html, found = re.subn(r"<body\b[^>]*>", lambda m: m[0] + banner, html, count=1, flags=re.I)
+    if not found:
+        html = html.replace(head, head + banner, 1)
+    # Store HTML is someone else's code: no scripts, and an opaque origin away from pricewatch.
+    return HTMLResponse(html, headers={"Content-Security-Policy": "sandbox"})
 
 
 @router.post("/listings/{listing_id}/delete", dependencies=[Depends(protected)])

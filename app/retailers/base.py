@@ -8,6 +8,12 @@ from app.schemas.domain import Condition, Identity, Snapshot
 from app.services.matching import identify, normalize
 
 
+def with_page(snapshots: list[Snapshot], html: str) -> list[Snapshot]:
+    for snapshot in snapshots:
+        snapshot.page = html
+    return snapshots
+
+
 class RetailerAdapter:
     name: str
     label: str
@@ -179,12 +185,12 @@ class RetailerAdapter:
             raise ScrapeError("Use a product page URL, not a search or category page")
         html = await self.fetcher.get(url, self.name, self.hosts)
         try:
-            return self.parse_page(html, url, alternatives)
+            return with_page(self.parse_page(html, url, alternatives), html)
         except ScrapeError:
             if not self.fetcher.get_preferences().playwright_enabled:
                 raise
             html = await self.fetcher.render(url, self.name, self.hosts)
-            return self.parse_page(html, url, alternatives)
+            return with_page(self.parse_page(html, url, alternatives), html)
 
     def parse_page(self, html: str, url: str, alternatives: bool) -> list[Snapshot]:
         # Only the generic reader has other prices to offer; dedicated adapters ignore it.

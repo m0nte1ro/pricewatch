@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -110,6 +111,8 @@ class PriceHistory(Base):
     method: Mapped[str] = mapped_column(
         String(20), default="structured", server_default="structured"
     )
+    # The page as fetched, gzipped, kept only for readings that set a new all-time low.
+    page: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
 
 
 class Alert(Base):

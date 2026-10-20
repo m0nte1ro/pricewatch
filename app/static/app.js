@@ -45,3 +45,27 @@ document.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') document.querySelectorAll('details.filters[open]').forEach(menu => { menu.open = false; });
 });
+// Name alerts field: comma adds like Enter, Backspace on an empty field removes the last tag,
+// and a link to #alerts opens the panel with the cursor in the field.
+document.addEventListener('keydown', event => {
+  const input = event.target.closest?.('.tag-field input');
+  if (!input) return;
+  if (event.key === ',' ) {
+    event.preventDefault();
+    if (input.value.trim()) input.form.requestSubmit();
+  } else if (event.key === 'Backspace' && !input.value) {
+    const chips = input.closest('.tag-field').querySelectorAll('.tag-chip button');
+    if (chips.length) chips[chips.length - 1].click();
+  }
+});
+document.addEventListener('click', event => {
+  const field = event.target.closest('.tag-field');
+  if (field && !event.target.closest('a, button, input')) field.querySelector('input').focus();
+});
+document.addEventListener('DOMContentLoaded', () => {
+  const target = location.hash && document.querySelector(`details${location.hash}`);
+  if (!target) return;
+  target.open = true;
+  // After the browser has settled on the #fragment, which would otherwise keep the focus.
+  requestAnimationFrame(() => target.querySelector('.tag-field input')?.focus());
+});

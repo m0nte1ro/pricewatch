@@ -307,7 +307,7 @@ def test_outlet_tab_rings_the_bell_and_keeps_name_alerts(site):
     assert items(runtime.db)["1"].belled is True
     client.post("/outlet/rules", data=form_data(client, text="  85C7L "))
     page = client.get("/outlet").text
-    assert '85C7L<span class="tag-count">1</span>' in page
+    assert '>85C7L</a><span class="tag-hits" aria-label="1 in stock">1</span>' in page
     assert client.post("/outlet/rules", data=form_data(client, text="''")).status_code == 422
 
 
@@ -625,3 +625,20 @@ def test_check_now_reads_every_followed_page(site):
     response = client.post("/outlet/check", data=form_data(client), follow_redirects=False)
     assert response.status_code == 303
     assert len(items(runtime.db)) == 3
+
+
+def test_adding_and_removing_an_alert_returns_to_the_open_alerts_panel(site):
+    client, runtime, _, _ = site
+    added = client.post(
+        "/outlet/rules", data=form_data(client, text="OLED77"), follow_redirects=False
+    )
+    assert added.headers["location"] == "/outlet#alerts"
+    with runtime.db.session() as session:
+        rule_id = session.scalar(select(OutletRule.id))
+    page = client.get("/outlet").text
+    assert f'<button type="submit" form="rule-delete-{rule_id}"' in page
+    assert 'form="rule-add" name="text"' in page
+    removed = client.post(
+        f"/outlet/rules/{rule_id}/delete", data=form_data(client), follow_redirects=False
+    )
+    assert removed.headers["location"] == "/outlet#alerts"

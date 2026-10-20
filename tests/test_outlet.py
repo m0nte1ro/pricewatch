@@ -282,8 +282,9 @@ def test_outlet_tab_follows_a_page_and_lists_its_products(site):
     )
     assert response.status_code == 303, response.text
     page = client.get("/outlet").text
-    assert "TV LG OLED65CX5" in page
-    assert "€959.74" in page and ">OFF20<" in page and "€1,199.67 without code" in page
+    assert ">LG OLED65CX5<" in page
+    assert '<div class="price-now">€959.74</div>' in page
+    assert ">OFF20 −20%<" in page and "<s>€2,999.00</s>" in page
     assert "3 in stock of 3 seen" in page
     again = client.post("/outlet/feeds", data=form_data(client, url=OUTLET_URL))
     assert again.status_code == 422 and "already on the Outlet tab" in again.text
@@ -397,13 +398,10 @@ def test_outlet_sorts_by_size_with_unknown_sizes_last(stocked):
     assert order(stocked, "-size") == ["b", "c", "a", "d", "e"]
 
 
-def test_outlet_page_links_each_sortable_column_both_ways(site, stocked):
+def test_outlet_page_shows_the_chosen_sort(site, stocked):
     client = site[0]
-    page = client.get("/outlet?sort=price").text
-    assert 'href="/outlet?sort=-price"' in page and 'Price<span aria-hidden="true"> ↑' in page
-    assert 'href="/outlet?sort=size"' in page
-    assert "Newest first" in page
-    assert "Newest first" not in client.get("/outlet?sort=bogus").text
+    assert '<option value="-size" selected>' in client.get("/outlet?sort=-size").text
+    assert '<option value="" selected>Newest first' in client.get("/outlet?sort=bogus").text
 
 
 @pytest.mark.parametrize(
@@ -492,9 +490,10 @@ def test_outlet_table_filters(shelf, filters, shown):
 def test_outlet_page_filters_from_the_query_and_keeps_them_when_sorting(site, shelf):
     client = site[0]
     page = client.get("/outlet?q=tcl&grade=b&max_price=abc&sort=price").text
-    assert "TV TCL 85C7L" in page and "TV Samsung" not in page
-    assert '<span class="count">1 of 4</span>' in page
-    assert 'href="/outlet?q=tcl&amp;grade=b&amp;max_price=abc&amp;sort=-price"' in page
+    assert ">TCL 85C7L<" in page and ">Samsung QE55Q80A<" not in page
+    assert "<b>1</b> of 4 product" in page
+    assert '<input type="radio" name="grade" value="B" checked>' in page
+    assert 'href="/outlet?grade=b&amp;max_price=abc&amp;sort=price&amp;q=85C7L"' in page
     assert 'href="/outlet?sort=price">Clear filters' in page
 
 
@@ -520,3 +519,53 @@ def test_only_products_after_the_first_read_are_new(site):
     overview = runtime.outlet.overview()
     assert [item.item_id for item in overview["items"] if item.id in overview["fresh"]] == ["new"]
     assert overview["stats"]["new"] == 1
+
+
+@pytest.mark.parametrize(
+    ("title", "heading", "specs"),
+    [
+        (
+            "TV SAMSUNG TQ65QN80FAUXXC (Outlet Grade A - NeoQLED - Mini LED - 65'' - 165 cm - 4K - Smart TV)",
+            "Samsung TQ65QN80FAUXXC",
+            ["NeoQLED", "Mini LED", "4K"],
+        ),
+        (
+            "TV LG OLED65CX5 (Outlet Grade A - OLED - 65'' - 165 cm - 4K Ultra HD - Smart TV)",
+            "LG OLED65CX5",
+            ["OLED", "4K Ultra HD"],
+        ),
+        (
+            "TV SONY Bravia 5 K-55XR5 (Outlet Grade A - MINI LED - 55'')",
+            "Sony Bravia 5 K-55XR5",
+            ["MINI LED"],
+        ),
+        ("Soundbar LG S90TY", "Soundbar LG S90TY", []),
+    ],
+)
+def test_rows_name_brand_and_model_and_keep_only_useful_specs(title, heading, specs):
+    item = OutletItem(title=title)
+    assert (item.heading, item.specs) == (heading, specs)
+
+
+def test_a_coupon_arriving_is_not_shown_as_a_price_drop(site):
+    client, runtime, _, _ = site
+    with runtime.db.session() as session:
+        feed = OutletFeed(retailer="worten", url=OUTLET_URL)
+        session.add(feed)
+        session.flush()
+        apply(session, feed, [tv("1", "TV A", "600")])
+        apply(session, feed, [tv("1", "TV A", "600", promo="480", code="OFF20")])
+        apply(session, feed, [tv("2", "TV B", "900")])
+        apply(session, feed, [tv("2", "TV B", "800")])
+    page = client.get("/outlet").text
+    assert "↓ from €600.00" not in page
+    assert "↓ from €900.00" in page
+
+
+@pytest.mark.parametrize(
+    ("minutes", "text"), [(0, "just now"), (12, "12 min ago"), (180, "3 h ago"), (2900, "2 d ago")]
+)
+def test_times_read_as_how_long_ago(minutes, text):
+    from app.web.common import ago
+
+    assert ago(now() - timedelta(minutes=minutes)) == text

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 from app.schemas.domain import lower_price, now
 
+SPEC_NOISE = re.compile(r"outlet|grade|\bcm\b|smart\s*tv", re.I)
 GRADE = re.compile(r"\bgrade\s+([a-d])\b", re.I)
 SIZE = re.compile(r"(?<![\d.,])(\d{2,3}(?:[.,]\d)?)\s*(?:''|\"|″|”|')")
 
@@ -230,6 +231,26 @@ class OutletItem(Base):
         """Screen size in inches, from a title such as "(OLED - 65'' - 165 cm)"."""
         match = SIZE.search(self.title)
         return Decimal(match.group(1).replace(",", ".")) if match else None
+
+    @property
+    def heading(self) -> str:
+        """Brand and model: "TV SAMSUNG QE55Q80A (Outlet Grade A - …)" reads "Samsung QE55Q80A"."""
+        name = re.sub(r"^\s*TV\s+", "", self.title.split("(")[0], flags=re.I).strip()
+        brand, _, model = name.partition(" ")
+        # Stores shout brands; keep short ones (LG, TCL) as they are written.
+        if brand.isupper() and len(brand) > 3:
+            brand = brand.capitalize()
+        return f"{brand} {model}".strip() or self.title
+
+    @property
+    def specs(self) -> list[str]:
+        """What the bracket adds beyond grade, size and the obvious: panel, resolution."""
+        bracket = self.title.partition("(")[2].rstrip(") ")
+        return [
+            part
+            for part in (part.strip() for part in bracket.split(" - "))
+            if part and not SPEC_NOISE.search(part) and not SIZE.fullmatch(part)
+        ]
 
 
 class OutletPrice(Base):

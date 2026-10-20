@@ -32,3 +32,9 @@ document.addEventListener('htmx:responseError', event => {
   const target = event.detail.target;
   if (target) target.textContent = 'Request failed. Reload the page and try again.';
 });
+// Filters left blank stay out of the request, so the pushed URL reads like the page's own links.
+document.addEventListener('htmx:configRequest', event => {
+  const data = event.detail.formData;
+  if (event.detail.elt.id !== 'outlet-filters' || !data) return;
+  [...new Set(data.keys())].filter(key => data.getAll(key).every(value => value === '')).forEach(key => data.delete(key));
+});

@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from decimal import Decimal
 
 import httpx
@@ -10,8 +11,8 @@ from app.retailers.http import Fetcher
 from app.retailers.parsing import ScrapeError
 from app.retailers.registry import Registry
 from app.retailers.worten import nuxt_data
-from app.schemas.domain import FeedItem, Preferences
-from app.services.outlet import EMPTY_READ, apply
+from app.schemas.domain import FeedItem, Preferences, now
+from app.services.outlet import EMPTY_READ, Filters, apply, matching_rules, mentions
 from tests.conftest import FIXTURES, GENERIC_PAGES
 from tests.test_web import form_data
 
@@ -303,7 +304,7 @@ def test_outlet_tab_rings_the_bell_and_keeps_name_alerts(site):
     assert items(runtime.db)["1"].belled is True
     client.post("/outlet/rules", data=form_data(client, text="  85C7L "))
     page = client.get("/outlet").text
-    assert "“85C7L”" in page and "1 in stock now" in page
+    assert '85C7L<span class="tag-count" aria-label="1 in stock">1</span>' in page
     assert client.post("/outlet/rules", data=form_data(client, text="''")).status_code == 422
 
 
@@ -399,7 +400,123 @@ def test_outlet_sorts_by_size_with_unknown_sizes_last(stocked):
 def test_outlet_page_links_each_sortable_column_both_ways(site, stocked):
     client = site[0]
     page = client.get("/outlet?sort=price").text
-    assert 'href="/outlet?sort=-price"' in page and "Price ↑" in page
+    assert 'href="/outlet?sort=-price"' in page and 'Price<span aria-hidden="true"> ↑' in page
     assert 'href="/outlet?sort=size"' in page
     assert "Newest first" in page
     assert "Newest first" not in client.get("/outlet?sort=bogus").text
+
+
+@pytest.mark.parametrize(
+    ("title", "text", "found"),
+    [
+        ("TV HISENSE 85ABG (Outlet Grade A - LED - 85'' - 216 cm)", "85", True),
+        ("TV SAMSUNG TQ65S85DAEXXC (Outlet Grade A - OLED - 65'' - 165 cm)", "85", False),
+        ("TV LG OLED55CX5 (Outlet Grade B - OLED - 55'' - 140 cm)", "65", False),
+        ("TV TCL 85 C7L", "85c7l", True),
+        ("TV LG 55QN8500", "LG 55", True),
+        ("TV LG OLED65CX5 (OLED - 65'')", "OLED65", True),
+        ("TV LG OLED65CX5 (OLED - 65'')", "LED", False),
+        ("TV SAMSUNG TQ85QN900FTXXC", "85", False),
+    ],
+)
+def test_name_alerts_match_from_the_start_of_a_word(title, text, found):
+    assert mentions(title, text) is found
+
+
+def test_the_same_alert_saved_twice_matches_once():
+    rules = [OutletRule(text="85C7L"), OutletRule(text="85 c7l"), OutletRule(text="TCL")]
+    assert matching_rules(rules, "TV TCL 85C7L") == ["85 c7l", "TCL"]
+
+
+def test_an_alert_already_saved_is_not_added_again(site):
+    client, runtime, _, _ = site
+    for text in ("85C7L", "85 c7l", "85-C7L"):
+        client.post("/outlet/rules", data=form_data(client, text=text))
+    with runtime.db.session() as session:
+        assert session.scalars(select(OutletRule.text)).all() == ["85C7L"]
+
+
+def test_an_alert_counts_each_product_once_even_on_two_pages(site):
+    client, runtime, _, _ = site
+    with runtime.db.session() as session:
+        for url in (OUTLET_URL, OUTLET_URL + "/lg"):
+            feed = OutletFeed(retailer="worten", url=url)
+            session.add(feed)
+            session.flush()
+            apply(session, feed, [tv("1", "TV LG OLED65CX5 (OLED - 65'')")])
+        session.add(OutletRule(text="OLED65"))
+    overview = runtime.outlet.overview()
+    assert list(overview["matches"].values()) == [1]
+    assert overview["stats"]["alerted"] == 1
+
+
+@pytest.fixture
+def shelf(site):
+    _, runtime, _, _ = site
+    with runtime.db.session() as session:
+        feed = OutletFeed(retailer="worten", url=OUTLET_URL)
+        session.add(feed)
+        session.flush()
+        listed = [
+            tv("a", "TV LG OLED65CX5 (Outlet Grade A - OLED - 65'')", "1200", promo="960"),
+            tv("b", "TV TCL 85C7L (Outlet Grade B - 85'')", "1500"),
+            tv("c", "TV Samsung QE55Q80A (Outlet Grade A - QLED - 55'')", "700"),
+        ]
+        apply(session, feed, [*listed, tv("d", "TV Sony 77'' (Outlet Grade C)", "900")])
+        apply(session, feed, listed)
+        session.scalar(select(OutletItem).where(OutletItem.item_id == "b")).belled = True
+        session.add(OutletRule(text="85C7L"))
+    return runtime
+
+
+@pytest.mark.parametrize(
+    ("filters", "shown"),
+    [
+        (Filters(q="oled 65"), ["a"]),
+        (Filters(q="samsung"), ["c"]),
+        (Filters(stock="out"), ["d"]),
+        (Filters(stock="in"), ["a", "b", "c"]),
+        (Filters(grade="A"), ["a", "c"]),
+        (Filters(min_size=Decimal(60), max_size=Decimal(80)), ["a", "d"]),
+        (Filters(max_price=Decimal(960)), ["a", "c", "d"]),
+        (Filters(belled=True), ["b"]),
+        (Filters(alerted=True), ["b"]),
+        (Filters(q="oled", stock="out"), []),
+    ],
+)
+def test_outlet_table_filters(shelf, filters, shown):
+    items = shelf.outlet.overview("", filters)["items"]
+    assert sorted(item.item_id for item in items) == shown
+
+
+def test_outlet_page_filters_from_the_query_and_keeps_them_when_sorting(site, shelf):
+    client = site[0]
+    page = client.get("/outlet?q=tcl&grade=b&max_price=abc&sort=price").text
+    assert "TV TCL 85C7L" in page and "TV Samsung" not in page
+    assert '<span class="count">1 of 4</span>' in page
+    assert 'href="/outlet?q=tcl&amp;grade=b&amp;max_price=abc&amp;sort=-price"' in page
+    assert 'href="/outlet?sort=price">Clear filters' in page
+
+
+def test_bell_rings_in_place_for_htmx(site, shelf):
+    client, runtime, _, _ = site
+    item_id = items(runtime.db)["a"].id
+    response = client.post(
+        f"/outlet/items/{item_id}/bell", data=form_data(client), headers={"HX-Request": "true"}
+    )
+    assert response.status_code == 200
+    assert response.text.startswith("<form") and 'aria-pressed="true"' in response.text
+
+
+def test_only_products_after_the_first_read_are_new(site):
+    _, runtime, _, _ = site
+    with runtime.db.session() as session:
+        feed = OutletFeed(retailer="worten", url=OUTLET_URL, created_at=now() - timedelta(days=1))
+        session.add(feed)
+        session.flush()
+        apply(session, feed, [tv("old", "TV A")])
+        feed.items[0].first_seen_at = now() - timedelta(hours=1)
+        apply(session, feed, [tv("old", "TV A"), tv("new", "TV B")])
+    overview = runtime.outlet.overview()
+    assert [item.item_id for item in overview["items"] if item.id in overview["fresh"]] == ["new"]
+    assert overview["stats"]["new"] == 1

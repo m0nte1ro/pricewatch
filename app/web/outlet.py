@@ -1,11 +1,16 @@
+import re
+from decimal import Decimal
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select, update
 
 from app.models import Alert, OutletFeed, OutletItem, OutletPrice, OutletRule
 from app.retailers.http import user_waiting
-from app.retailers.parsing import ScrapeError
+from app.retailers.parsing import ScrapeError, money
 from app.services.matching import normalize
+from app.services.outlet import Filters
 from app.web.common import full_https, protected, render
 
 router = APIRouter()
@@ -33,9 +38,37 @@ async def read_now(runtime, feed: OutletFeed):
         await runtime.outlet.run(feed.id, force=True)
 
 
+def size(value: str) -> Decimal | None:
+    return Decimal(value) if re.fullmatch(r"\d{2,3}(\.\d)?", value) else None
+
+
+def filters(params) -> Filters:
+    """The table's filters from the query string; anything malformed is ignored."""
+    stock, grade = params.get("stock", ""), params.get("grade", "").upper()
+    return Filters(
+        q=" ".join(params.get("q", "").split())[:100],
+        stock=stock if stock in ("in", "out") else "",
+        grade=grade if len(grade) == 1 and grade in "ABCD" else "",
+        min_size=size(params.get("min_size", "")),
+        max_size=size(params.get("max_size", "")),
+        max_price=money(params.get("max_price")),
+        belled=params.get("belled") == "on",
+        alerted=params.get("alerted") == "on",
+    )
+
+
 @router.get("/outlet")
 async def outlet_page(request: Request, sort: str = ""):
-    return render(request, "outlet.html", **request.app.state.runtime.outlet.overview(sort))
+    params = request.query_params
+
+    def link(**changes) -> str:
+        """This page's URL with some parameters changed; empty values drop out."""
+        query = {key: value for key, value in params.items() if key not in changes}
+        query.update({key: value for key, value in changes.items() if value})
+        return "/outlet" + (f"?{urlencode(query)}" if query else "")
+
+    overview = request.app.state.runtime.outlet.overview(sort, filters(params))
+    return render(request, "outlet.html", **overview, link=link)
 
 
 @router.post("/outlet/feeds", dependencies=[Depends(protected)])
@@ -100,6 +133,8 @@ async def toggle_bell(request: Request, item_id: int):
         if item is None:
             raise HTTPException(404, "Outlet item not found")
         item.belled = not item.belled
+    if request.headers.get("HX-Request"):
+        return render(request, "partials/outlet_bell.html", item=item)
     return RedirectResponse(f"/outlet#item-{item_id}", 303)
 
 
@@ -110,7 +145,9 @@ async def add_rule(request: Request):
     if not normalize(text) or len(text) > 100:
         raise HTTPException(422, "Enter 1–100 characters with at least one letter or digit")
     with request.app.state.runtime.db.session() as session:
-        session.add(OutletRule(text=text))
+        saved = {normalize(rule) for rule in session.scalars(select(OutletRule.text))}
+        if normalize(text) not in saved:
+            session.add(OutletRule(text=text))
     return RedirectResponse("/outlet", 303)
 
 

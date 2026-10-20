@@ -1,6 +1,9 @@
 import asyncio
 import logging
 import random
+import re
+import unicodedata
+from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 
@@ -15,12 +18,64 @@ log = logging.getLogger(__name__)
 
 # Sortable columns of the tab, by the item attribute they sort on.
 SORTS = {"price": "deal_price", "size": "size"}
+WORD = re.compile(r"[A-Z0-9]+")
+# Products that arrived after a page's first read and within this long are marked new.
+NEW_FOR = timedelta(days=2)
 EMPTY_READ = "The page listed no products; keeping the last stock until it lists some again"
 
 
+def mentions(title: str, text: str) -> bool:
+    """Whether the title has the text starting at the beginning of one of its words.
+
+    Spaces and punctuation are ignored, so "85C7L" finds "TCL 85 C7L" and "LG 55" finds
+    "LG 55QN8500", but "85" does not find "TQ65S85D" or "165 cm".
+    """
+    wanted = normalize(text)
+    words = WORD.findall(unicodedata.normalize("NFKD", title).upper())
+    joined, start = "".join(words), 0
+    for word in words:
+        if joined.startswith(wanted, start):
+            return True
+        start += len(word)
+    return False
+
+
 def matching_rules(rules: list[OutletRule], title: str) -> list[str]:
-    name = normalize(title)
-    return [rule.text for rule in rules if normalize(rule.text) in name]
+    # A rule saved twice in different spelling ("85c7l", "85 C7L") is one match.
+    hits = {normalize(rule.text): rule.text for rule in rules if mentions(title, rule.text)}
+    return list(hits.values())
+
+
+@dataclass
+class Filters:
+    """What the table shows; every field narrows it, empty ones are ignored."""
+
+    q: str = ""
+    stock: str = ""
+    grade: str = ""
+    min_size: Decimal | None = None
+    max_size: Decimal | None = None
+    max_price: Decimal | None = None
+    belled: bool = False
+    alerted: bool = False
+
+    def keeps(self, item: OutletItem, hits: list[str]) -> bool:
+        size, price = item.size, item.deal_price
+        return (
+            all(mentions(item.title, term) for term in self.q.split())
+            and (self.stock != "in" or item.in_stock)
+            and (self.stock != "out" or not item.in_stock)
+            and (not self.grade or item.grade == self.grade)
+            and (self.min_size is None or (size is not None and size >= self.min_size))
+            and (self.max_size is None or (size is not None and size <= self.max_size))
+            and (self.max_price is None or (price is not None and price <= self.max_price))
+            and (not self.belled or item.belled)
+            and (not self.alerted or bool(hits))
+        )
+
+    @property
+    def active(self) -> bool:
+        return self != Filters()
 
 
 def emit(session, item: OutletItem, event: str, message: str):
@@ -159,23 +214,25 @@ class OutletService:
                 await self.read(one)
             await self.notifications.deliver()
 
-    def overview(self, sort: str = "") -> dict:
+    def overview(self, sort: str = "", filters: Filters | None = None) -> dict:
         """The tab's contents; sort is "price" or "size", "-" first for high to low."""
+        filters = filters or Filters()
         with self.db.session() as session:
             feeds = session.scalars(select(OutletFeed).order_by(OutletFeed.id)).all()
             rules = session.scalars(select(OutletRule).order_by(OutletRule.id)).all()
-            # In stock first, newest arrivals on top; what left the outlet last sinks to the end.
-            items = sorted(
-                (item for feed in feeds for item in feed.items),
-                key=lambda item: (
-                    not item.in_stock,
-                    -(
-                        item.first_seen_at
-                        if item.in_stock
-                        else item.out_of_stock_since or item.first_seen_at
-                    ).timestamp(),
-                ),
-            )
+            everything = [item for feed in feeds for item in feed.items]
+        # In stock first, newest arrivals on top; what left the outlet last sinks to the end.
+        items = sorted(
+            everything,
+            key=lambda item: (
+                not item.in_stock,
+                -(
+                    item.first_seen_at
+                    if item.in_stock
+                    else item.out_of_stock_since or item.first_seen_at
+                ).timestamp(),
+            ),
+        )
         if field := SORTS.get(sort.removeprefix("-")):
             known = sorted(
                 (item for item in items if getattr(item, field) is not None),
@@ -187,18 +244,46 @@ class OutletService:
                 known + [item for item in items if getattr(item, field) is None],
                 key=lambda item: not item.in_stock,
             )
-        matches = {
-            rule.id: sum(
-                1 for item in items if item.in_stock and matching_rules([rule], item.title)
-            )
-            for rule in rules
+        hits = {item.id: matching_rules(rules, item.title) for item in everything}
+        in_stock = [item for item in everything if item.in_stock]
+        # The first read records what was already there; only later arrivals are new.
+        first_read = {
+            feed.id: min((item.first_seen_at for item in feed.items), default=now())
+            for feed in feeds
         }
+        fresh = {
+            item.id
+            for item in in_stock
+            if item.first_seen_at > first_read[item.feed_id] + timedelta(minutes=10)
+            and item.first_seen_at >= now() - NEW_FOR
+        }
+        # A product listed on two followed pages is still one product.
+        products = {item.item_id: item for item in in_stock}.values()
         return {
             "feeds": feeds,
-            "items": items,
+            "items": [item for item in items if filters.keeps(item, hits[item.id])],
+            "total": len(everything),
+            "counts": {
+                feed.id: (sum(1 for item in feed.items if item.in_stock), len(feed.items))
+                for feed in feeds
+            },
             "rules": rules,
-            "matches": matches,
+            "matches": {
+                rule.id: sum(1 for item in products if mentions(item.title, rule.text))
+                for rule in rules
+            },
+            "hits": hits,
+            "fresh": fresh,
+            "stats": {
+                "in_stock": len(products),
+                "new": len(fresh),
+                "belled": sum(1 for item in everything if item.belled),
+                "alerted": sum(1 for item in products if hits[item.id]),
+            },
+            "sizes": sorted({item.size for item in everything if item.size is not None}),
+            "grades": sorted({item.grade for item in everything if item.grade}),
             "sort": sort if field else "",
+            "filters": filters,
         }
 
     async def read(self, feed_id: int):

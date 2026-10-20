@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 from app.schemas.domain import lower_price, now
 
+GRADE = re.compile(r"\bgrade\s+([a-d])\b", re.I)
 SIZE = re.compile(r"(?<![\d.,])(\d{2,3}(?:[.,]\d)?)\s*(?:''|\"|″|”|')")
 
 
@@ -217,6 +218,12 @@ class OutletItem(Base):
     @property
     def deal_price(self) -> Decimal | None:
         return lower_price(self.price, self.promo_price)
+
+    @property
+    def grade(self) -> str | None:
+        """The outlet grade the title names ("Outlet Grade B"), A best."""
+        match = GRADE.search(self.title)
+        return match.group(1).upper() if match else None
 
     @property
     def size(self) -> Decimal | None:

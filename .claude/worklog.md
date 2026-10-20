@@ -54,6 +54,8 @@ _Updated 2026-10-20_
   - The first read of a page and products already there when a name alert is created don't alert.
   - Follow-up (branch `outlet-coupons-sorting`): outlet coupon prices from Worten's `cms/solve-offer-badges-batch` (card flag "Outlet | -20% c/ cupão", code OFF20 from the flag's pop-up); deal price drives sorting, bells and alerts like the watchlist's promo prices. Table sorts by size (from the title) and price, asc/desc, out of stock stays last. Migration `b49284a9b844`. Live read: 33 TVs, all OFF20.
   - The flags API answers 400 unless the body carries `moduleId` (the page's "Filtered grid" module), `contextId` (the page's context hash) and `uri`, all from `__NUXT_DATA__`; found by a second Playwright capture.
+  - Follow-up (branch `outlet-filters`): name alerts matched across word boundaries ("85" hit TQ65S85D, "65" hit "165 cm"); now the text must start a word. Duplicate alerts are refused, counts are distinct products. Outlet page redone: stats row, alert tags that wrap, collapsible "Follow a page", sticky filter bar (search, stock, grade, size range, max price, belled, matches an alert) filtering live through HTMX with the filters in the URL, bell toggled in place, New/grade/alert badges on rows, card layout on phones. Checked in headless Chromium routed into the TestClient (no server started).
+  - User feedback: wants more effort on the front end; called the per-row match counting broken.
 - **Left open:** outlet pages aren't in the watchlist export; Worten watchlist listings for outlet products miss the same "-20% c/ cupão" flag (its card flag has no code, `COUPON_FLAG` requires one); container rebuild needed for both migrations.
 
 ### 2026-10-09

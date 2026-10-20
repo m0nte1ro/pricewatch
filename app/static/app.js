@@ -9,6 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
     fields.append(row);
     row.querySelector('input').focus();
   });
+  // Alerts & pages sit beside the list on wide screens; on narrow ones they fold away.
+  const manage = document.querySelector('details.manage');
+  if (manage && window.matchMedia('(max-width: 1150px)').matches) manage.open = false;
   document.querySelectorAll('form[data-busy]').forEach(form => {
     form.addEventListener('submit', () => {
       const button = form.querySelector('button[type="submit"]');

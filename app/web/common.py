@@ -7,9 +7,24 @@ from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from app.retailers.parsing import money
+from app.schemas.domain import now
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 TEMPLATES.env.filters["money"] = lambda value: f"€{value:,.2f}" if value is not None else "—"
+
+
+def ago(value) -> str:
+    """How long ago, roughly: "just now", "12 min ago", "3 h ago", "2 d ago"."""
+    if value is None:
+        return "never"
+    seconds = (now() - value).total_seconds()
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "min")):
+        if seconds >= size:
+            return f"{int(seconds // size)} {unit} ago"
+    return "just now"
+
+
+TEMPLATES.env.filters["ago"] = ago
 TEMPLATES.env.filters["date"] = lambda value: (
     value.strftime("%d %b %H:%M UTC") if value else "Never"
 )

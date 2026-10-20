@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import timedelta
 from decimal import Decimal
 
@@ -282,9 +283,9 @@ def test_outlet_tab_follows_a_page_and_lists_its_products(site):
     )
     assert response.status_code == 303, response.text
     page = client.get("/outlet").text
-    assert ">LG OLED65CX5<" in page
-    assert '<span class="now">€959.74</span><s>€2,999.00</s>' in page
-    assert ">−20% with OFF20<" in page
+    assert ">LG OLED65CX5 ↗<" in page
+    assert "<b>€959.74</b>" in page and "<s>€2,999.00</s>" in page
+    assert ">OFF20 −20%<" in page
     assert 'src="https://www.worten.pt/i/65ffd69de0fa7acbdf937bf3d12dc65a9cfa1e86"' in page
     assert "3 in stock, 3 seen in all." in page
     again = client.post("/outlet/feeds", data=form_data(client, url=OUTLET_URL))
@@ -399,10 +400,13 @@ def test_outlet_sorts_by_size_with_unknown_sizes_last(stocked):
     assert order(stocked, "-size") == ["b", "c", "a", "d", "e"]
 
 
-def test_outlet_page_shows_the_chosen_sort(site, stocked):
+def test_outlet_table_sorts_from_its_column_headers(site, stocked):
     client = site[0]
-    assert '<option value="-size" selected>' in client.get("/outlet?sort=-size").text
-    assert '<option value="" selected>Newest first' in client.get("/outlet?sort=bogus").text
+    page = client.get("/outlet?sort=price").text
+    assert 'href="/outlet?sort=-price"' in page and 'Price<span aria-hidden="true"> ↑' in page
+    assert 'href="/outlet?sort=size"' in page
+    assert ">Newest first<" in page
+    assert ">Newest first<" not in client.get("/outlet?sort=bogus").text
 
 
 @pytest.mark.parametrize(
@@ -491,11 +495,12 @@ def test_outlet_table_filters(shelf, filters, shown):
 def test_outlet_page_filters_from_the_query_and_keeps_them_when_sorting(site, shelf):
     client = site[0]
     page = client.get("/outlet?q=tcl&grade=b&max_price=abc&sort=price").text
-    assert ">TCL 85C7L<" in page and ">Samsung QE55Q80A<" not in page
-    assert "1 of 3 in stock shown." in page
-    assert '<input type="radio" name="grade" value="B" checked>' in page
+    assert ">TCL 85C7L ↗<" in page and ">Samsung QE55Q80A ↗<" not in page
+    assert '<span class="count">1 of 4</span>' in page
+    assert '<option value="B" selected>' in page
+    assert '<span id="filter-count"> <span class="count">1</span></span>' in page
     assert 'href="/outlet?grade=b&amp;max_price=abc&amp;sort=price&amp;q=85C7L"' in page
-    assert 'href="/outlet?sort=price">Show everything' in page
+    assert 'href="/outlet?sort=price">Clear all' in page
 
 
 def test_bell_rings_in_place_for_htmx(site, shelf):
@@ -596,5 +601,27 @@ def test_size_chips_count_what_is_in_stock(shelf):
 
 def test_size_chips_filter_from_the_query(site, shelf):
     page = site[0].get("/outlet?size=65&size=85&size=bogus").text
-    assert ">LG OLED65CX5<" in page and ">TCL 85C7L<" in page and ">Samsung QE55Q80A<" not in page
+    assert (
+        ">LG OLED65CX5 ↗<" in page
+        and ">TCL 85C7L ↗<" in page
+        and ">Samsung QE55Q80A ↗<" not in page
+    )
     assert '<input type="checkbox" name="size" value="65" checked>' in page
+
+
+def test_out_of_stock_products_stay_in_the_table_last(site, shelf):
+    page = site[0].get("/outlet?sort=price").text
+    rows = re.findall(r'<tr id="item-\d+" class="([^"]*)"', page)
+    assert [row.startswith("read") for row in rows] == [False, False, False, True]
+
+
+def test_check_now_reads_every_followed_page(site):
+    client, runtime, _, requests = site
+    GENERIC_PAGES[OUTLET_URL] = CATEGORY_HTML
+    GENERIC_PAGES[API_URL] = FEED_JSON
+    GENERIC_PAGES[BADGES_URL] = BADGES_JSON
+    with runtime.db.session() as session:
+        session.add(OutletFeed(retailer="worten", url=OUTLET_URL))
+    response = client.post("/outlet/check", data=form_data(client), follow_redirects=False)
+    assert response.status_code == 303
+    assert len(items(runtime.db)) == 3

@@ -92,6 +92,17 @@ async def add_feed(request: Request):
     return RedirectResponse("/outlet", 303)
 
 
+@router.post("/outlet/check", dependencies=[Depends(protected)])
+async def check_all(request: Request):
+    runtime = request.app.state.runtime
+    with runtime.db.session() as session:
+        feeds = session.scalars(select(OutletFeed)).all()
+    runtime.registry.fetcher.retry_now({feed.retailer for feed in feeds})
+    with user_waiting():
+        await runtime.outlet.run(force=True)
+    return RedirectResponse("/outlet", 303)
+
+
 @router.post("/outlet/feeds/{feed_id}/check", dependencies=[Depends(protected)])
 async def check_feed(request: Request, feed_id: int):
     runtime = request.app.state.runtime

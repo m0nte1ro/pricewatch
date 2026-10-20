@@ -222,14 +222,15 @@ Removing a product archives it and stops checks without deleting history. Disabl
 
 The **Outlet** tab follows whole store pages, such as `https://www.worten.pt/outlet/tv-video-e-som/tvs`, instead of single products. Paste the page under **Pages**; it is read straight away and then every 30 minutes (5–10080, per page, ±5% jitter) on the same scheduler, request pacing and store cooldowns as the watchlist. **Check now** reads it at once. Outlet products are separate from the watchlist.
 
-- **Products** lists everything the page has listed: price, the struck-through price before the outlet discount, the previous and lowest price seen. Products in stock come first, newest arrivals on top. A product that leaves the page (or is listed as sold out) is marked **Out of stock** and kept at the bottom; it goes back to in stock if it returns.
+- **Products** lists everything the page has listed: screen size (read from the name), price, the struck-through price before the outlet discount, the previous and lowest price seen. Products in stock come first, newest arrivals on top; click **Size** or **Price** to sort low to high, again for high to low (products without a size or price go last, out-of-stock ones stay at the bottom).
+- **Coupons.** When a card carries Worten's "-20% c/ cupão" flag, the price shown is the coupon price, with the code (e.g. OFF20, named in the flag's pop-up) and the price without it underneath. As on the watchlist, the coupon price is what bells, previous/lowest prices and alerts use, and alerts name the code; a coupon appearing counts as a price drop, one ending does not. A product that leaves the page (or is listed as sold out) is marked **Out of stock** and kept at the bottom; it goes back to in stock if it returns.
 - **The bell** on a product alerts on every price drop, on it going out of stock and on it coming back.
 - **Name alerts** alert when a product whose name contains the text appears on any followed page, or comes back to it, e.g. `85C7L`, `OLED77` or `LG 55QN8500`. Case, spaces and punctuation are ignored. Products already listed when the alert is created do not alert; the alert shows how many are in stock now.
 - The first read of a page records what is there without alerting. A read only changes stock when it is complete: a failed request, a changed response, or a page that suddenly lists nothing keeps the last known stock and shows the error under the page.
 
 Outlet events (`outlet new`, `outlet back`, `outlet price drop`, `outlet out of stock`) appear in Activity, linked to the product's row, and are pushed through ntfy like the others. Removing a page deletes its products and their price changes; their events stay in Activity. Outlet pages are not part of the watchlist export.
 
-Pages are read by the store's adapter (`fetch_feed`). Worten's page sends no products in its HTML: its script asks the storefront search API for the category the page names, 48 at a time, and pricewatch does the same. Other stores answer "Outlet pages from this store aren't supported yet".
+Pages are read by the store's adapter (`fetch_feed`). Worten's page sends no products in its HTML: its script asks the storefront search API for the category the page names, 48 at a time, then the flags API for each card's flags (quoting the page's grid module, context key and path), and pricewatch does the same. If the flags can't be read, the whole read fails rather than show prices without their coupons. Other stores answer "Outlet pages from this store aren't supported yet".
 
 ## Configuration and ntfy
 
@@ -261,7 +262,7 @@ Start by pasting a product link: the generic adapter reads any public store, and
 5. Save minimal public HTML/JSON fixtures, document whether they are live or synthetic, and test search, identity, stock, prices, sellers and conditions. Check that unrelated recommendation widgets do not become the main product.
 6. Start with `status = "partial"` and an honest `status_note`. Validate live behavior before calling an adapter supported.
 
-To follow a store's outlet or category pages, set `feed_pattern` (the page paths the reader accepts) and implement `fetch_feed(url)`, returning a `FeedItem` (store id, title, product URL, price, price before discount, in stock) for every product across all of the page's pages. Raise `ScrapeError` unless the read is complete, because a missing product is taken as out of stock.
+To follow a store's outlet or category pages, set `feed_pattern` (the page paths the reader accepts) and implement `fetch_feed(url)`, returning a `FeedItem` (store id, title, product URL, price, price before discount, coupon price and code, in stock) for every product across all of the page's pages. Raise `ScrapeError` unless the read is complete, because a missing product is taken as out of stock.
 
 For another notification destination, implement the `NotificationProvider.send` contract and wire the provider factory through `NotificationService`. For richer categories, extend identity extraction and fixtures, keeping conflicting identifiers authoritative. Add schema changes with `alembic revision --autogenerate -m 'description'`, inspect the migration, and apply it with `python -m app.migrate`.
 

@@ -1,0 +1,45 @@
+{
+ "success": true,
+ "count": 2,
+ "results": [
+  {
+   "offerId": "8ce7c472-985b-43a6-910e-4996ebcb991a",
+   "ok": true,
+   "data": {
+    "success": true,
+    "code": "FOUND",
+    "zones": [
+     {
+      "targets": "card_badge_winning_offer",
+      "badges": [
+       {
+        "order": 1,
+        "priority": 200,
+        "details": {
+         "id": "01HTFAJ5FNRADK5GAEDYRV6CRC",
+         "type": "badge-flag",
+         "name": "PT - Badge Flag - Campanha Stock OFF",
+         "data": {
+          "config": {
+           "text": "Outlet | -20% c/ cupão",
+           "modalContent": "<p><strong>Até 50% desconto direto + 20% desconto com o cupão OFF20</strong></p><p><br></p>"
+          }
+         }
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "offerId": "ffffffff-0000-4000-a001-00000087f76c",
+   "ok": true,
+   "data": {
+    "success": true,
+    "code": "FOUND",
+    "zones": []
+   }
+  }
+ ]
+}

@@ -34,8 +34,8 @@ async def read_now(runtime, feed: OutletFeed):
 
 
 @router.get("/outlet")
-async def outlet_page(request: Request):
-    return render(request, "outlet.html", **request.app.state.runtime.outlet.overview())
+async def outlet_page(request: Request, sort: str = ""):
+    return render(request, "outlet.html", **request.app.state.runtime.outlet.overview(sort))
 
 
 @router.post("/outlet/feeds", dependencies=[Depends(protected)])

@@ -9,6 +9,7 @@ from app.models import Alert, OutletFeed, OutletItem, OutletPrice, OutletRule
 from app.retailers.http import Fetcher
 from app.retailers.parsing import ScrapeError
 from app.retailers.registry import Registry
+from app.retailers.worten import nuxt_data
 from app.schemas.domain import FeedItem, Preferences
 from app.services.outlet import EMPTY_READ, apply
 from tests.conftest import FIXTURES, GENERIC_PAGES
@@ -16,16 +17,28 @@ from tests.test_web import form_data
 
 OUTLET_URL = "https://www.worten.pt/outlet/tv-video-e-som/tvs"
 API_URL = "https://www.worten.pt/worten-api/search-products"
+BADGES_URL = "https://www.worten.pt/worten-api/cms/solve-offer-badges-batch"
 CATEGORY_HTML = (FIXTURES / "worten_outlet_category_live.html").read_text()
 FEED_JSON = (FIXTURES / "worten_outlet_feed_live.json").read_text()
+BADGES_JSON = (FIXTURES / "worten_outlet_badges_live.json").read_text()
 
 
-def tv(item_id: str, title: str, price: str = "999", *, in_stock: bool = True) -> FeedItem:
+def tv(
+    item_id: str,
+    title: str,
+    price: str = "999",
+    *,
+    in_stock: bool = True,
+    promo: str | None = None,
+    code: str | None = None,
+) -> FeedItem:
     return FeedItem(
         item_id=item_id,
         title=title,
         url=f"https://www.worten.pt/produtos/tv-{item_id}",
         price=Decimal(price),
+        promo_price=Decimal(promo) if promo else None,
+        promo_code=code,
         in_stock=in_stock,
     )
 
@@ -66,15 +79,19 @@ def rule(db, text: str):
 
 
 def test_worten_category_page_names_the_category_its_script_searches():
-    adapter = Registry(Fetcher(None, None)).adapters["worten"]
-    assert adapter.feed_context(CATEGORY_HTML, OUTLET_URL) == "01G2Z1Z2GXXCNCP90BZRP243EW"
+    adapter, data = Registry(Fetcher(None, None)).adapters["worten"], nuxt_data(CATEGORY_HTML)
+    assert adapter.feed_context(data, OUTLET_URL) == "01G2Z1Z2GXXCNCP90BZRP243EW"
+    assert adapter.feed_grid(data) == "01G39872PRDQDWYGCC5K241C6N"
+    assert adapter.feed_page_context(data, "/outlet/tv-video-e-som/tvs") == (
+        "b2eddc67604dc9913784c575b97bfd1c6d9678d16729eb1232aeed6984e8e1cc"
+    )
     with pytest.raises(ScrapeError, match="isn't a product listing"):
-        adapter.feed_context(CATEGORY_HTML, "https://www.worten.pt/outlet/informatica")
+        adapter.feed_context(data, "https://www.worten.pt/outlet/informatica")
 
 
 def test_worten_listing_response_gives_every_product_with_its_price_and_stock():
     adapter = Registry(Fetcher(None, None)).adapters["worten"]
-    found = {item.item_id: item for item in adapter.feed_items(json.loads(FEED_JSON))}
+    found = {item.item_id: item for item in adapter.feed_items(json.loads(FEED_JSON)).values()}
     assert set(found) == {"7544485", "8910700", "9015156"}
     oled = found["7544485"]
     assert oled.title.startswith("TV LG OLED65CX5 (Outlet Grade A - OLED - 65''")
@@ -89,6 +106,33 @@ def test_worten_listing_response_gives_every_product_with_its_price_and_stock():
     assert found["9015156"].price == Decimal("160.97")
 
 
+def test_worten_card_coupon_flag_lowers_the_price_like_on_a_product_page():
+    adapter = Registry(Fetcher(None, None)).adapters["worten"]
+    offers = adapter.feed_items(json.loads(FEED_JSON))
+    adapter.feed_coupons(offers, json.loads(BADGES_JSON))
+    found = {item.item_id: item for item in offers.values()}
+    oled = found["7544485"]
+    assert (oled.price, oled.promo_price, oled.promo_code) == (
+        Decimal("1199.67"),
+        Decimal("959.74"),
+        "OFF20",
+    )
+    assert oled.deal_price == Decimal("959.74")
+    assert (found["8910700"].promo_price, found["9015156"].promo_price) == (None, None)
+
+
+def test_worten_coupon_without_a_named_code_still_counts():
+    adapter = Registry(Fetcher(None, None)).adapters["worten"]
+    offers = adapter.feed_items(json.loads(FEED_JSON))
+    badges = json.loads(BADGES_JSON)
+    badges["results"][0]["data"]["zones"][0]["badges"][0]["details"]["data"]["config"][
+        "modalContent"
+    ] = ""
+    adapter.feed_coupons(offers, badges)
+    oled = next(item for item in offers.values() if item.item_id == "7544485")
+    assert (oled.promo_price, oled.promo_code) == (Decimal("959.74"), None)
+
+
 async def test_worten_feed_asks_the_search_api_for_the_pages_category(db):
     bodies = []
 
@@ -96,6 +140,9 @@ async def test_worten_feed_asks_the_search_api_for_the_pages_category(db):
         if request.url.path == "/worten-api/search-products":
             bodies.append(json.loads(request.content))
             return httpx.Response(200, text=FEED_JSON)
+        if request.url.path == "/worten-api/cms/solve-offer-badges-batch":
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, text=BADGES_JSON)
         return httpx.Response(200, text=CATEGORY_HTML)
 
     fetcher = Fetcher(db, Preferences)
@@ -104,6 +151,27 @@ async def test_worten_feed_asks_the_search_api_for_the_pages_category(db):
     assert len(found) == 3
     assert bodies[0]["contexts"] == ["01G2Z1Z2GXXCNCP90BZRP243EW"]
     assert bodies[0]["params"]["pageNumber"] == 0
+    assert len(bodies[1]["badges"]) == 3
+    assert bodies[1]["badges"][0]["moduleId"] == "01G39872PRDQDWYGCC5K241C6N"
+    assert (bodies[1]["uri"], bodies[1]["contextId"][:8]) == (
+        "/outlet/tv-video-e-som/tvs",
+        "b2eddc67",
+    )
+    assert next(item for item in found if item.item_id == "7544485").promo_code == "OFF20"
+
+
+async def test_a_changed_flags_answer_fails_the_whole_read(db):
+    def respond(request):
+        if request.url.path == "/worten-api/search-products":
+            return httpx.Response(200, text=FEED_JSON)
+        if request.url.path == "/worten-api/cms/solve-offer-badges-batch":
+            return httpx.Response(200, json={"success": False})
+        return httpx.Response(200, text=CATEGORY_HTML)
+
+    fetcher = Fetcher(db, Preferences)
+    fetcher.transport, fetcher.min_delay = httpx.MockTransport(respond), 0
+    with pytest.raises(ScrapeError, match="flags response changed"):
+        await Registry(fetcher).adapters["worten"].fetch_feed(OUTLET_URL)
 
 
 def test_only_stores_with_a_feed_reader_take_outlet_pages():
@@ -205,6 +273,7 @@ def test_outlet_tab_follows_a_page_and_lists_its_products(site):
     client, runtime, _, _ = site
     GENERIC_PAGES[OUTLET_URL] = CATEGORY_HTML
     GENERIC_PAGES[API_URL] = FEED_JSON
+    GENERIC_PAGES[BADGES_URL] = BADGES_JSON
     response = client.post(
         "/outlet/feeds",
         data=form_data(client, url=OUTLET_URL, check_interval_minutes="30"),
@@ -213,6 +282,7 @@ def test_outlet_tab_follows_a_page_and_lists_its_products(site):
     assert response.status_code == 303, response.text
     page = client.get("/outlet").text
     assert "TV LG OLED65CX5" in page
+    assert "€959.74" in page and ">OFF20<" in page and "€1,199.67 without code" in page
     assert "3 in stock of 3 seen" in page
     again = client.post("/outlet/feeds", data=form_data(client, url=OUTLET_URL))
     assert again.status_code == 422 and "already on the Outlet tab" in again.text
@@ -250,3 +320,86 @@ def test_removing_a_page_keeps_its_alerts_in_activity(site):
     client.post(f"/outlet/feeds/{feed_id}/delete", data=form_data(client))
     assert items(runtime.db) == {}
     assert "PRICE DROP" in client.get("/alerts").text
+
+
+def test_a_coupon_appearing_is_a_price_drop_at_the_coupon_price(db, feed):
+    read(db, feed, [tv("1", "TV A", "1000")])
+    bell(db, "1")
+    read(db, feed, [tv("1", "TV A", "1000", promo="800", code="OFF20")])
+    assert alerts(db) == [
+        ("outlet_price_drop", "PRICE DROP · was 1000.00 EUR · TV A · 800.00 EUR with code OFF20")
+    ]
+    item = items(db)["1"]
+    assert (item.price, item.deal_price, item.previous_price, item.lowest_price) == (
+        Decimal("1000.00"),
+        Decimal("800.00"),
+        Decimal("1000.00"),
+        Decimal("800.00"),
+    )
+    with db.session() as session:
+        history = session.scalars(select(OutletPrice.promo_price).order_by(OutletPrice.id)).all()
+    assert history == [None, Decimal("800.00")]
+
+
+def test_a_coupon_ending_is_not_a_drop_and_lowest_keeps_the_coupon_price(db, feed):
+    read(db, feed, [tv("1", "TV A", "1000", promo="800")])
+    bell(db, "1")
+    read(db, feed, [tv("1", "TV A", "1000")])
+    assert alerts(db) == []
+    assert items(db)["1"].lowest_price == Decimal("800.00")
+
+
+@pytest.mark.parametrize(
+    ("title", "size"),
+    [
+        ("TV LG OLED65CX5 (Outlet Grade A - OLED - 65'' - 165 cm - 4K Ultra HD - Smart TV)", "65"),
+        ("NANO LG 4K 65' 65NANO926PB A7 FA 120H DV (Outlet Grade A)", "65"),
+        ('TV TCL 85C7L 85" QD-Mini LED', "85"),
+        ("TV Philips 42,5″ Ambilight", "42.5"),
+        ("Soundbar LG S90TY", None),
+    ],
+)
+def test_screen_size_is_read_from_the_title(title, size):
+    item = OutletItem(title=title)
+    assert item.size == (Decimal(size) if size else None)
+
+
+def order(runtime, sort: str) -> list[str]:
+    return [item.item_id for item in runtime.outlet.overview(sort)["items"]]
+
+
+@pytest.fixture
+def stocked(site):
+    _, runtime, _, _ = site
+    with runtime.db.session() as session:
+        feed = OutletFeed(retailer="worten", url=OUTLET_URL)
+        session.add(feed)
+        session.flush()
+        listed = [
+            tv("a", "TV 55'' cheap", "500"),
+            tv("b", "TV 85'' coupon", "1200", promo="700"),
+            tv("c", "TV 65'' dear", "900"),
+            tv("d", "TV without size", "600"),
+        ]
+        apply(session, feed, [*listed, tv("e", "TV 98'' gone", "100")])
+        apply(session, feed, listed)
+    return runtime
+
+
+def test_outlet_sorts_by_deal_price_keeping_out_of_stock_last(stocked):
+    assert order(stocked, "price") == ["a", "d", "b", "c", "e"]
+    assert order(stocked, "-price") == ["c", "b", "d", "a", "e"]
+
+
+def test_outlet_sorts_by_size_with_unknown_sizes_last(stocked):
+    assert order(stocked, "size") == ["a", "c", "b", "d", "e"]
+    assert order(stocked, "-size") == ["b", "c", "a", "d", "e"]
+
+
+def test_outlet_page_links_each_sortable_column_both_ways(site, stocked):
+    client = site[0]
+    page = client.get("/outlet?sort=price").text
+    assert 'href="/outlet?sort=-price"' in page and "Price ↑" in page
+    assert 'href="/outlet?sort=size"' in page
+    assert "Newest first" in page
+    assert "Newest first" not in client.get("/outlet?sort=bogus").text

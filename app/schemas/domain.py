@@ -87,9 +87,16 @@ class FeedItem(BaseModel):
     price: Decimal | None = None
     # The price before the outlet discount, when the store shows one.
     original_price: Decimal | None = None
+    # A lower price with a coupon the card advertises; deal_price is what the owner would pay.
+    promo_price: Decimal | None = None
+    promo_code: str | None = None
     in_stock: bool = True
 
-    @field_validator("price", "original_price")
+    @property
+    def deal_price(self) -> Decimal | None:
+        return lower_price(self.price, self.promo_price)
+
+    @field_validator("price", "original_price", "promo_price")
     @classmethod
     def valid_money(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and (not value.is_finite() or value <= 0):

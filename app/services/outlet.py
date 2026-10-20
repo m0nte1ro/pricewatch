@@ -13,6 +13,8 @@ from app.services.matching import normalize
 
 log = logging.getLogger(__name__)
 
+# Sortable columns of the tab, by the item attribute they sort on.
+SORTS = {"price": "deal_price", "size": "size"}
 EMPTY_READ = "The page listed no products; keeping the last stock until it lists some again"
 
 
@@ -27,8 +29,8 @@ def emit(session, item: OutletItem, event: str, message: str):
             outlet_item_id=item.id,
             event_type=event,
             old_price=item.previous_price,
-            new_price=item.price,
-            message=f"{message} · {item.title} · {price_text(item.price)}",
+            new_price=item.deal_price,
+            message=f"{message} · {item.title} · {offer_text(item)}",
         )
     )
     log.info("alert_triggered", extra={"event_type": event})
@@ -38,8 +40,19 @@ def price_text(price: Decimal | None) -> str:
     return f"{price} EUR" if price is not None else "no price"
 
 
+def offer_text(item: OutletItem) -> str:
+    text = price_text(item.deal_price)
+    if item.promo_price is not None and item.deal_price == item.promo_price:
+        text += f" with code {item.promo_code}" if item.promo_code else " with coupon"
+    return text
+
+
 def apply(session, feed: OutletFeed, found: list[FeedItem]):
-    """Fold a complete read of the feed into its items and raise the alerts it calls for."""
+    """Fold a complete read of the feed into its items and raise the alerts it calls for.
+
+    Prices compared, kept as previous/lowest and alerted on are deal prices: a coupon the
+    card advertises counts like any other discount.
+    """
     items = {item.item_id: item for item in feed.items}
     if not found and any(item.in_stock for item in items.values()):
         # One empty answer must not flag the whole outlet as gone and ring every bell.
@@ -58,7 +71,9 @@ def apply(session, feed: OutletFeed, found: list[FeedItem]):
                 url=reading.url,
                 price=reading.price,
                 original_price=reading.original_price,
-                lowest_price=reading.price,
+                promo_price=reading.promo_price,
+                promo_code=reading.promo_code,
+                lowest_price=reading.deal_price,
                 in_stock=reading.in_stock,
                 out_of_stock_since=None if reading.in_stock else now(),
             )
@@ -69,19 +84,24 @@ def apply(session, feed: OutletFeed, found: list[FeedItem]):
             if not first and reading.in_stock and (hits := matching_rules(rules, item.title)):
                 emit(session, item, "outlet_new", f"NEW IN OUTLET · matches {', '.join(hits)}")
             continue
-        was_in_stock, old = item.in_stock, item.price
+        was_in_stock, old = item.in_stock, item.deal_price
+        changed = (item.price, item.promo_price) != (reading.price, reading.promo_price)
         item.title, item.url, item.original_price = (
             reading.title,
             reading.url,
             reading.original_price,
         )
+        item.price, item.promo_price, item.promo_code = (
+            reading.price,
+            reading.promo_price,
+            reading.promo_code,
+        )
         item.last_seen_at = now()
-        if reading.price != old:
-            item.previous_price, item.price = old, reading.price
-        if reading.price is not None and (
-            item.lowest_price is None or reading.price < item.lowest_price
-        ):
-            item.lowest_price = reading.price
+        new = reading.deal_price
+        if new != old:
+            item.previous_price = old
+        if new is not None and (item.lowest_price is None or new < item.lowest_price):
+            item.lowest_price = new
         item.in_stock = reading.in_stock
         if reading.in_stock and not was_in_stock:
             item.out_of_stock_since = None
@@ -93,15 +113,9 @@ def apply(session, feed: OutletFeed, found: list[FeedItem]):
             item.out_of_stock_since = now()
             if item.belled:
                 emit(session, item, "outlet_out_of_stock", "OUT OF STOCK")
-        elif (
-            reading.in_stock
-            and item.belled
-            and old is not None
-            and reading.price is not None
-            and reading.price < old
-        ):
+        elif reading.in_stock and item.belled and old is not None and new is not None and new < old:
             emit(session, item, "outlet_price_drop", f"PRICE DROP · was {price_text(old)}")
-        if reading.price != old or reading.in_stock != was_in_stock:
+        if changed or reading.in_stock != was_in_stock:
             record(session, item)
     for item in items.values():
         if item.item_id in seen or not item.in_stock:
@@ -114,7 +128,14 @@ def apply(session, feed: OutletFeed, found: list[FeedItem]):
 
 
 def record(session, item: OutletItem):
-    session.add(OutletPrice(item_id=item.id, price=item.price, in_stock=item.in_stock))
+    session.add(
+        OutletPrice(
+            item_id=item.id,
+            price=item.price,
+            promo_price=item.promo_price,
+            in_stock=item.in_stock,
+        )
+    )
 
 
 class OutletService:
@@ -138,7 +159,8 @@ class OutletService:
                 await self.read(one)
             await self.notifications.deliver()
 
-    def overview(self) -> dict:
+    def overview(self, sort: str = "") -> dict:
+        """The tab's contents; sort is "price" or "size", "-" first for high to low."""
         with self.db.session() as session:
             feeds = session.scalars(select(OutletFeed).order_by(OutletFeed.id)).all()
             rules = session.scalars(select(OutletRule).order_by(OutletRule.id)).all()
@@ -154,13 +176,30 @@ class OutletService:
                     ).timestamp(),
                 ),
             )
+        if field := SORTS.get(sort.removeprefix("-")):
+            known = sorted(
+                (item for item in items if getattr(item, field) is not None),
+                key=lambda item: getattr(item, field),
+                reverse=sort.startswith("-"),
+            )
+            # Stable: out-of-stock products stay at the bottom, unknown values last in each part.
+            items = sorted(
+                known + [item for item in items if getattr(item, field) is None],
+                key=lambda item: not item.in_stock,
+            )
         matches = {
             rule.id: sum(
                 1 for item in items if item.in_stock and matching_rules([rule], item.title)
             )
             for rule in rules
         }
-        return {"feeds": feeds, "items": items, "rules": rules, "matches": matches}
+        return {
+            "feeds": feeds,
+            "items": items,
+            "rules": rules,
+            "matches": matches,
+            "sort": sort if field else "",
+        }
 
     async def read(self, feed_id: int):
         with self.db.session() as session:

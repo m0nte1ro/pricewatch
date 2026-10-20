@@ -208,6 +208,7 @@ class OutletItem(Base):
     # previous_price and lowest_price are deal prices: what the owner would have paid.
     lowest_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
+    image_url: Mapped[str | None] = mapped_column(Text)
     # The bell: alert on every price drop and stock change of this item.
     belled: Mapped[bool] = mapped_column(Boolean, default=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)

@@ -91,6 +91,8 @@ class FeedItem(BaseModel):
     promo_price: Decimal | None = None
     promo_code: str | None = None
     in_stock: bool = True
+    # The store's product photo, shown on the Outlet tab straight from the store.
+    image_url: str | None = None
 
     @property
     def deal_price(self) -> Decimal | None:

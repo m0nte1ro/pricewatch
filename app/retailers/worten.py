@@ -16,6 +16,9 @@ COUPON_CODE = re.compile(r"cup[ãa]o\s+([A-Z0-9]{3,})\b")
 SEARCH_API = "https://www.worten.pt/worten-api/search-products"
 BADGES_API = "https://www.worten.pt/worten-api/cms/solve-offer-badges-batch"
 BADGES_BATCH = 24
+# Product photos as the storefront's cards show them: /i/<the image's "default" transform>.
+IMAGES = "https://www.worten.pt/i/"
+IMAGE_ID = re.compile(r"[0-9a-f]{40}")
 FEED_PAGE_SIZE = 48
 FEED_MAX_PAGES = 20
 
@@ -175,6 +178,7 @@ class WortenAdapter(RetailerAdapter):
                 continue
             price = money(offer["price"].get("final"))
             original = money(offer["price"].get("original"))
+            image = (product.get("image") or {}).get("transforms", {}).get("default")
             items[offer_id] = FeedItem(
                 item_id=str(refs["sku"]),
                 title=name,
@@ -182,6 +186,7 @@ class WortenAdapter(RetailerAdapter):
                 price=price,
                 original_price=original if original and price and original > price else None,
                 in_stock=offer.get("stock", {}).get("is_in_stock") is True,
+                image_url=f"{IMAGES}{image}" if IMAGE_ID.fullmatch(str(image)) else None,
             )
         return items
 

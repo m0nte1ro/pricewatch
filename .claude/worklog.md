@@ -52,7 +52,9 @@ _Updated 2026-10-20_
   - Outlet products are separate from the watchlist (user's choice); one bell = favourite; name alerts are a plain text box, no other filters (user's words).
   - Stock only changes on a complete read; an empty read of a page that had products is an error, so one hiccup can't ring every bell.
   - The first read of a page and products already there when a name alert is created don't alert.
-- **Left open:** outlet pages aren't in the watchlist export; no coupon prices on outlet cards (Worten sends them in a separate badges call); container rebuild needed for the migration.
+  - Follow-up (branch `outlet-coupons-sorting`): outlet coupon prices from Worten's `cms/solve-offer-badges-batch` (card flag "Outlet | -20% c/ cupão", code OFF20 from the flag's pop-up); deal price drives sorting, bells and alerts like the watchlist's promo prices. Table sorts by size (from the title) and price, asc/desc, out of stock stays last. Migration `b49284a9b844`. Live read: 33 TVs, all OFF20.
+  - The flags API answers 400 unless the body carries `moduleId` (the page's "Filtered grid" module), `contextId` (the page's context hash) and `uri`, all from `__NUXT_DATA__`; found by a second Playwright capture.
+- **Left open:** outlet pages aren't in the watchlist export; Worten watchlist listings for outlet products miss the same "-20% c/ cupão" flag (its card flag has no code, `COUPON_FLAG` requires one); container rebuild needed for both migrations.
 
 ### 2026-10-09
 - **Did:**

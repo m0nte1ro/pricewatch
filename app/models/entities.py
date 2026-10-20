@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -19,6 +20,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.schemas.domain import lower_price, now
+
+SIZE = re.compile(r"(?<![\d.,])(\d{2,3}(?:[.,]\d)?)\s*(?:''|\"|″|”|')")
 
 
 class Product(Base):
@@ -198,6 +201,9 @@ class OutletItem(Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     previous_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     original_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    promo_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    promo_code: Mapped[str | None] = mapped_column(String(50))
+    # previous_price and lowest_price are deal prices: what the owner would have paid.
     lowest_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
     # The bell: alert on every price drop and stock change of this item.
@@ -207,6 +213,16 @@ class OutletItem(Base):
     out_of_stock_since: Mapped[datetime | None] = mapped_column(DateTime)
     feed: Mapped[OutletFeed] = relationship(back_populates="items")
     prices: Mapped[list["OutletPrice"]] = relationship(cascade="all, delete-orphan")
+
+    @property
+    def deal_price(self) -> Decimal | None:
+        return lower_price(self.price, self.promo_price)
+
+    @property
+    def size(self) -> Decimal | None:
+        """Screen size in inches, from a title such as "(OLED - 65'' - 165 cm)"."""
+        match = SIZE.search(self.title)
+        return Decimal(match.group(1).replace(",", ".")) if match else None
 
 
 class OutletPrice(Base):
@@ -218,6 +234,7 @@ class OutletPrice(Base):
     item_id: Mapped[int] = mapped_column(ForeignKey("outlet_items.id"))
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=now)
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    promo_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     in_stock: Mapped[bool] = mapped_column(Boolean)
 
 

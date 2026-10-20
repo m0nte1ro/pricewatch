@@ -158,11 +158,11 @@ async def add_rule(request: Request):
         saved = {normalize(rule) for rule in session.scalars(select(OutletRule.text))}
         if normalize(text) not in saved:
             session.add(OutletRule(text=text))
-    return RedirectResponse("/outlet", 303)
+    return RedirectResponse("/outlet#alerts", 303)
 
 
 @router.post("/outlet/rules/{rule_id}/delete", dependencies=[Depends(protected)])
 async def delete_rule(request: Request, rule_id: int):
     with request.app.state.runtime.db.session() as session:
         session.execute(delete(OutletRule).where(OutletRule.id == rule_id))
-    return RedirectResponse("/outlet", 303)
+    return RedirectResponse("/outlet#alerts", 303)

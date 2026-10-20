@@ -9,9 +9,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fields.append(row);
     row.querySelector('input').focus();
   });
-  // Alerts & pages sit beside the list on wide screens; on narrow ones they fold away.
-  const manage = document.querySelector('details.manage');
-  if (manage && window.matchMedia('(max-width: 1150px)').matches) manage.open = false;
   document.querySelectorAll('form[data-busy]').forEach(form => {
     form.addEventListener('submit', () => {
       const button = form.querySelector('button[type="submit"]');
@@ -40,4 +37,11 @@ document.addEventListener('htmx:configRequest', event => {
   const data = event.detail.formData;
   if (event.detail.elt.id !== 'outlet-filters' || !data) return;
   [...new Set(data.keys())].filter(key => data.getAll(key).every(value => value === '')).forEach(key => data.delete(key));
+});
+// The Filters dropdown closes on a click elsewhere or Escape, like a menu.
+document.addEventListener('click', event => {
+  document.querySelectorAll('details.filters[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') document.querySelectorAll('details.filters[open]').forEach(menu => { menu.open = false; });
 });

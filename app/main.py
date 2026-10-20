@@ -10,7 +10,7 @@ from app.config import Config
 from app.database import Database
 from app.logging import configure
 from app.runtime import Runtime
-from app.web import discovery, products, settings
+from app.web import discovery, outlet, products, settings
 from app.web.common import render
 
 
@@ -71,6 +71,7 @@ def create_app(config: Config | None = None, *, database: Database | None = None
     application.include_router(products.router)
     application.include_router(discovery.router)
     application.include_router(settings.router)
+    application.include_router(outlet.router)
     application.mount(
         "/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static"
     )

@@ -1,0 +1,128 @@
+{
+ "searchResponse": {
+  "totalHits": 3,
+  "hasNextPage": false
+ },
+ "detailsResponse": {
+  "productsCanonicalsData": {
+   "web_items": [
+    {
+     "external_id": "1005094050",
+     "id": "01G43GSTE9SQVJPZCP6J3TGVGK",
+     "url": "/produtos/tv-lg-oled65cx5-outlet-grade-a-oled-65-165-cm-4k-ultra-hd-smart-tv-7544485",
+     "type": "product"
+    },
+    {
+     "external_id": "2022114213",
+     "id": "01KTV887E9NRSDN467110DHAT5",
+     "url": "/produtos/tv-samsung-tq85qn900ftxxc-outlet-grade-a-neoqled-mini-led-85-216-cm-8k-smart-tv-ai-8910700",
+     "type": "product"
+    },
+    {
+     "external_id": "2040827980",
+     "id": "01M3VJC3RFZEVNJQPXWC87AXQG",
+     "url": "/produtos/tv-lg-28tq515s-wz-outlet-grade-b-led-28-71-cm-hd-smart-tv-9015156",
+     "type": "product"
+    }
+   ]
+  },
+  "productsData": {
+   "products": [
+    {
+     "id": "7854cf75-078d-49e7-8b46-444aabacec3d",
+     "woffer": {
+      "offer_id": "8ce7c472-985b-43a6-910e-4996ebcb991a",
+      "total_offers": 1
+     },
+     "meta": {
+      "refs": {
+       "webitem_id": "01G43GSTE9SQVJPZCP6J3TGVGK",
+       "sku": "7544485"
+      }
+     },
+     "properties": {
+      "text": {
+       "brand_name": "LG",
+       "name": "TV LG OLED65CX5 (Outlet Grade A - OLED - 65'' - 165 cm - 4K Ultra HD - Smart TV)"
+      }
+     }
+    },
+    {
+     "id": "ffffffff-0000-4000-a000-0000788703a5",
+     "woffer": {
+      "offer_id": "ffffffff-0000-4000-a001-00000087f76c",
+      "total_offers": 1
+     },
+     "meta": {
+      "refs": {
+       "webitem_id": "01KTV887E9NRSDN467110DHAT5",
+       "sku": "8910700"
+      }
+     },
+     "properties": {
+      "text": {
+       "brand_name": "SAMSUNG",
+       "name": "TV SAMSUNG TQ85QN900FTXXC (Outlet Grade A - NeoQLED - Mini LED - 85'' - 216 cm - 8K - Smart TV AI)"
+      }
+     }
+    },
+    {
+     "id": "ffffffff-0000-4000-a000-000079a4904c",
+     "woffer": {
+      "offer_id": "ffffffff-0000-4000-a001-000000898f74",
+      "total_offers": 1
+     },
+     "meta": {
+      "refs": {
+       "webitem_id": "01M3VJC3RFZEVNJQPXWC87AXQG",
+       "sku": "9015156"
+      }
+     },
+     "properties": {
+      "text": {
+       "brand_name": "LG",
+       "name": "TV LG 28TQ515S-WZ (Outlet Grade B - LED - 28'' - 71 cm - HD - Smart TV)"
+      }
+     }
+    }
+   ]
+  },
+  "offersData": {
+   "offers": [
+    {
+     "offer_id": "8ce7c472-985b-43a6-910e-4996ebcb991a",
+     "price": {
+      "original": "2999",
+      "final": "1199.67",
+      "ptype": "none"
+     },
+     "stock": {
+      "is_in_stock": true
+     }
+    },
+    {
+     "offer_id": "ffffffff-0000-4000-a001-00000087f76c",
+     "price": {
+      "original": "6999",
+      "final": "3499.57",
+      "ptype": "none"
+     },
+     "stock": {
+      "is_in_stock": true
+     }
+    },
+    {
+     "offer_id": "ffffffff-0000-4000-a001-000000898f74",
+     "price": {
+      "original": "229.99",
+      "final": "160.97",
+      "ptype": "promotion"
+     },
+     "stock": {
+      "is_in_stock": true
+     }
+    }
+   ]
+  }
+ }
+}

@@ -1,7 +1,7 @@
 # Work log: pricewatch
 
 ## Where things stand
-_Updated 2026-10-09_
+_Updated 2026-10-20_
 
 - **Branch / state:** `main`, in sync with `origin/main` (head `636bd76`, the user's worklog commit), clean apart from this log. 278 tests pass, ruff and `alembic check` clean. Local and remote `link-aggregation` branches are fully merged, safe to delete.
 - **Next steps:**
@@ -43,6 +43,16 @@ _Updated 2026-10-09_
   - `.claude/CLAUDE.md`: the user's working rules.
 
 ## Log
+
+### 2026-10-20
+- **Did:**
+  - Outlet tab (branch `outlet-feeds`): follows whole store pages through a new adapter method `fetch_feed` (Worten first), lists every product, keeps those that leave the page as Out of stock at the bottom, a bell per product (price drops, out of stock, back), and name alerts (substring of the product name) for new or returning products. Migration `d167a74d6277` (outlet tables; `alerts.product_id` nullable, `alerts.outlet_item_id`). 16 tests, 294 pass.
+  - Worten outlet pages render no products server-side; the storefront posts `worten-api/search-products` with `contexts: [<category id from __NUXT_DATA__>]`, 48 per page. Found by one Playwright page load; a live `fetch_feed` read 34 TVs.
+- **Decided:**
+  - Outlet products are separate from the watchlist (user's choice); one bell = favourite; name alerts are a plain text box, no other filters (user's words).
+  - Stock only changes on a complete read; an empty read of a page that had products is an error, so one hiccup can't ring every bell.
+  - The first read of a page and products already there when a name alert is created don't alert.
+- **Left open:** outlet pages aren't in the watchlist export; no coupon prices on outlet cards (Worten sends them in a separate badges call); container rebuild needed for the migration.
 
 ### 2026-10-09
 - **Did:**

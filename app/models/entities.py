@@ -118,8 +118,10 @@ class PriceHistory(Base):
 class Alert(Base):
     __tablename__ = "alerts"
     id: Mapped[int] = mapped_column(primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    # Outlet alerts concern an outlet item, not a watchlist product.
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), index=True)
     listing_id: Mapped[int | None] = mapped_column(ForeignKey("listings.id"))
+    outlet_item_id: Mapped[int | None] = mapped_column(ForeignKey("outlet_items.id"), index=True)
     event_type: Mapped[str] = mapped_column(String(50))
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     old_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
@@ -164,4 +166,65 @@ class DiscoveryDraft(Base):
     status: Mapped[str] = mapped_column(String(30), default="pending")
     payload: Mapped[dict] = mapped_column(JSON)
     results: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class OutletFeed(Base):
+    """A store's category or outlet page, read in full on a schedule."""
+
+    __tablename__ = "outlet_feeds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    retailer: Mapped[str] = mapped_column(String(50))
+    url: Mapped[str] = mapped_column(Text, unique=True)
+    check_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    next_check_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    # The last complete read; None until the first one, which records without alerting.
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    items: Mapped[list["OutletItem"]] = relationship(
+        back_populates="feed", cascade="all, delete-orphan"
+    )
+
+
+class OutletItem(Base):
+    __tablename__ = "outlet_items"
+    __table_args__ = (UniqueConstraint("feed_id", "item_id", name="uq_outlet_items_feed_item"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    feed_id: Mapped[int] = mapped_column(ForeignKey("outlet_feeds.id"), index=True)
+    item_id: Mapped[str] = mapped_column(String(150))
+    title: Mapped[str] = mapped_column(String(500))
+    url: Mapped[str] = mapped_column(Text)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    previous_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    original_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    lowest_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The bell: alert on every price drop and stock change of this item.
+    belled: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    out_of_stock_since: Mapped[datetime | None] = mapped_column(DateTime)
+    feed: Mapped[OutletFeed] = relationship(back_populates="items")
+    prices: Mapped[list["OutletPrice"]] = relationship(cascade="all, delete-orphan")
+
+
+class OutletPrice(Base):
+    """A reading that changed an outlet item's price or stock."""
+
+    __tablename__ = "outlet_prices"
+    __table_args__ = (Index("ix_outlet_prices_item_time", "item_id", "timestamp"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("outlet_items.id"))
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=now)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    in_stock: Mapped[bool] = mapped_column(Boolean)
+
+
+class OutletRule(Base):
+    """Alert when an item whose name contains this text shows up on any outlet feed."""
+
+    __tablename__ = "outlet_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

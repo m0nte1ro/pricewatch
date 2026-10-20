@@ -4,8 +4,10 @@ from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsp
 from bs4 import BeautifulSoup
 
 from app.retailers.parsing import ScrapeError, availability, condition, money, product_data, text_at
-from app.schemas.domain import Condition, Identity, Snapshot
+from app.schemas.domain import Condition, FeedItem, Identity, Snapshot
 from app.services.matching import identify, normalize
+
+FEED_UNSUPPORTED = "Outlet pages from this store aren't supported yet"
 
 
 def with_page(snapshots: list[Snapshot], html: str) -> list[Snapshot]:
@@ -35,6 +37,8 @@ class RetailerAdapter:
     searchable = True
     # Seconds between requests to this store; None uses the fetcher default (2 s).
     request_interval: float | None = None
+    # Category or outlet pages this store's fetch_feed can read in full; empty when it has none.
+    feed_pattern = ""
 
     def __init__(self, fetcher):
         self.fetcher = fetcher
@@ -70,6 +74,15 @@ class RetailerAdapter:
 
     def is_product_url(self, url: str) -> bool:
         return bool(re.search(self.product_pattern, urlsplit(url).path, re.I))
+
+    def is_feed_url(self, url: str) -> bool:
+        return bool(self.feed_pattern) and bool(
+            re.search(self.feed_pattern, urlsplit(url).path, re.I)
+        )
+
+    async def fetch_feed(self, url: str) -> list[FeedItem]:
+        """Every product the page lists, across all of its pages; raises unless complete."""
+        raise ScrapeError(FEED_UNSUPPORTED)
 
     def extract_product_identity(self, data: dict, title: str) -> Identity:
         brand = data.get("brand")

@@ -78,6 +78,25 @@ class Snapshot(BaseModel):
         return value.quantize(Decimal("0.01")) if value is not None else None
 
 
+class FeedItem(BaseModel):
+    """One product on a store's category or outlet page, as the page lists it."""
+
+    item_id: str
+    title: str
+    url: str
+    price: Decimal | None = None
+    # The price before the outlet discount, when the store shows one.
+    original_price: Decimal | None = None
+    in_stock: bool = True
+
+    @field_validator("price", "original_price")
+    @classmethod
+    def valid_money(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and (not value.is_finite() or value <= 0):
+            raise ValueError("Price must be a positive finite amount")
+        return value.quantize(Decimal("0.01")) if value is not None else None
+
+
 class PriceRule(BaseModel):
     price_selector: str
     availability_selector: str | None = None

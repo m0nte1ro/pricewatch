@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -53,21 +54,19 @@ class Filters:
     q: str = ""
     stock: str = ""
     grade: str = ""
-    min_size: Decimal | None = None
-    max_size: Decimal | None = None
+    sizes: tuple[Decimal, ...] = ()
     max_price: Decimal | None = None
     belled: bool = False
     alerted: bool = False
 
     def keeps(self, item: OutletItem, hits: list[str]) -> bool:
-        size, price = item.size, item.deal_price
+        price = item.deal_price
         return (
             all(mentions(item.title, term) for term in self.q.split())
             and (self.stock != "in" or item.in_stock)
             and (self.stock != "out" or not item.in_stock)
             and (not self.grade or item.grade == self.grade)
-            and (self.min_size is None or (size is not None and size >= self.min_size))
-            and (self.max_size is None or (size is not None and size <= self.max_size))
+            and (not self.sizes or item.size in self.sizes)
             and (self.max_price is None or (price is not None and price <= self.max_price))
             and (not self.belled or item.belled)
             and (not self.alerted or bool(hits))
@@ -128,6 +127,7 @@ def apply(session, feed: OutletFeed, found: list[FeedItem]):
                 original_price=reading.original_price,
                 promo_price=reading.promo_price,
                 promo_code=reading.promo_code,
+                image_url=reading.image_url,
                 lowest_price=reading.deal_price,
                 in_stock=reading.in_stock,
                 out_of_stock_since=None if reading.in_stock else now(),
@@ -146,6 +146,7 @@ def apply(session, feed: OutletFeed, found: list[FeedItem]):
             reading.url,
             reading.original_price,
         )
+        item.image_url = reading.image_url or item.image_url
         item.price, item.promo_price, item.promo_code = (
             reading.price,
             reading.promo_price,
@@ -280,7 +281,8 @@ class OutletService:
                 "belled": sum(1 for item in everything if item.belled),
                 "alerted": sum(1 for item in products if hits[item.id]),
             },
-            "sizes": sorted({item.size for item in everything if item.size is not None}),
+            # The size chips: every size in stock, with how many of each.
+            "size_counts": sorted(Counter(item.size for item in products if item.size).items()),
             "grades": sorted({item.grade for item in everything if item.grade}),
             "sort": sort if field else "",
             "filters": filters,

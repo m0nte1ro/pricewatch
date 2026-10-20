@@ -45,6 +45,12 @@
        "brand_name": "LG",
        "name": "TV LG OLED65CX5 (Outlet Grade A - OLED - 65'' - 165 cm - 4K Ultra HD - Smart TV)"
       }
+     },
+     "image": {
+      "url": "70c370935b38fb26ddd32fb11309707704a40bdc",
+      "transforms": {
+       "default": "65ffd69de0fa7acbdf937bf3d12dc65a9cfa1e86"
+      }
      }
     },
     {
@@ -64,6 +70,12 @@
        "brand_name": "SAMSUNG",
        "name": "TV SAMSUNG TQ85QN900FTXXC (Outlet Grade A - NeoQLED - Mini LED - 85'' - 216 cm - 8K - Smart TV AI)"
       }
+     },
+     "image": {
+      "url": "edcd9bc3e21efdef20af05a181e711875d9c7862",
+      "transforms": {
+       "default": "af3663095ab486bcd299dda851fcad5cf7be2253"
+      }
      }
     },
     {
@@ -82,6 +94,12 @@
       "text": {
        "brand_name": "LG",
        "name": "TV LG 28TQ515S-WZ (Outlet Grade B - LED - 28'' - 71 cm - HD - Smart TV)"
+      }
+     },
+     "image": {
+      "url": "9ca6964df8bcda897fa2b692edb1e5df4ff7f7c0",
+      "transforms": {
+       "default": "f6c498d3bd359be29b77dc869171068b00bd26ff"
       }
      }
     }

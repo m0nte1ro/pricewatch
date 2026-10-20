@@ -283,9 +283,10 @@ def test_outlet_tab_follows_a_page_and_lists_its_products(site):
     assert response.status_code == 303, response.text
     page = client.get("/outlet").text
     assert ">LG OLED65CX5<" in page
-    assert '<div class="price-now">€959.74</div>' in page
-    assert ">OFF20 −20%<" in page and "<s>€2,999.00</s>" in page
-    assert "3 in stock of 3 seen" in page
+    assert '<span class="now">€959.74</span><s>€2,999.00</s>' in page
+    assert ">−20% with OFF20<" in page
+    assert 'src="https://www.worten.pt/i/65ffd69de0fa7acbdf937bf3d12dc65a9cfa1e86"' in page
+    assert "3 in stock, 3 seen in all." in page
     again = client.post("/outlet/feeds", data=form_data(client, url=OUTLET_URL))
     assert again.status_code == 422 and "already on the Outlet tab" in again.text
 
@@ -305,7 +306,7 @@ def test_outlet_tab_rings_the_bell_and_keeps_name_alerts(site):
     assert items(runtime.db)["1"].belled is True
     client.post("/outlet/rules", data=form_data(client, text="  85C7L "))
     page = client.get("/outlet").text
-    assert '85C7L<span class="tag-count" aria-label="1 in stock">1</span>' in page
+    assert '85C7L<span class="tag-count">1</span>' in page
     assert client.post("/outlet/rules", data=form_data(client, text="''")).status_code == 422
 
 
@@ -475,7 +476,7 @@ def shelf(site):
         (Filters(stock="out"), ["d"]),
         (Filters(stock="in"), ["a", "b", "c"]),
         (Filters(grade="A"), ["a", "c"]),
-        (Filters(min_size=Decimal(60), max_size=Decimal(80)), ["a", "d"]),
+        (Filters(sizes=(Decimal(65), Decimal(77))), ["a", "d"]),
         (Filters(max_price=Decimal(960)), ["a", "c", "d"]),
         (Filters(belled=True), ["b"]),
         (Filters(alerted=True), ["b"]),
@@ -491,10 +492,10 @@ def test_outlet_page_filters_from_the_query_and_keeps_them_when_sorting(site, sh
     client = site[0]
     page = client.get("/outlet?q=tcl&grade=b&max_price=abc&sort=price").text
     assert ">TCL 85C7L<" in page and ">Samsung QE55Q80A<" not in page
-    assert "<b>1</b> of 4 product" in page
+    assert "1 of 3 in stock shown." in page
     assert '<input type="radio" name="grade" value="B" checked>' in page
     assert 'href="/outlet?grade=b&amp;max_price=abc&amp;sort=price&amp;q=85C7L"' in page
-    assert 'href="/outlet?sort=price">Clear filters' in page
+    assert 'href="/outlet?sort=price">Show everything' in page
 
 
 def test_bell_rings_in_place_for_htmx(site, shelf):
@@ -558,8 +559,8 @@ def test_a_coupon_arriving_is_not_shown_as_a_price_drop(site):
         apply(session, feed, [tv("2", "TV B", "900")])
         apply(session, feed, [tv("2", "TV B", "800")])
     page = client.get("/outlet").text
-    assert "↓ from €600.00" not in page
-    assert "↓ from €900.00" in page
+    assert "Down from €600.00" not in page
+    assert "Down from €900.00" in page
 
 
 @pytest.mark.parametrize(
@@ -569,3 +570,31 @@ def test_times_read_as_how_long_ago(minutes, text):
     from app.web.common import ago
 
     assert ago(now() - timedelta(minutes=minutes)) == text
+
+
+def test_worten_listing_gives_each_product_its_photo():
+    adapter = Registry(Fetcher(None, None)).adapters["worten"]
+    found = {item.item_id: item for item in adapter.feed_items(json.loads(FEED_JSON)).values()}
+    assert found["7544485"].image_url == (
+        "https://www.worten.pt/i/65ffd69de0fa7acbdf937bf3d12dc65a9cfa1e86"
+    )
+
+
+def test_a_read_without_a_photo_keeps_the_one_already_known(db, feed):
+    read(db, feed, [tv("1", "TV A").model_copy(update={"image_url": "https://www.worten.pt/i/x"})])
+    read(db, feed, [tv("1", "TV A")])
+    assert items(db)["1"].image_url == "https://www.worten.pt/i/x"
+
+
+def test_size_chips_count_what_is_in_stock(shelf):
+    assert shelf.outlet.overview()["size_counts"] == [
+        (Decimal(55), 1),
+        (Decimal(65), 1),
+        (Decimal(85), 1),
+    ]
+
+
+def test_size_chips_filter_from_the_query(site, shelf):
+    page = site[0].get("/outlet?size=65&size=85&size=bogus").text
+    assert ">LG OLED65CX5<" in page and ">TCL 85C7L<" in page and ">Samsung QE55Q80A<" not in page
+    assert '<input type="checkbox" name="size" value="65" checked>' in page

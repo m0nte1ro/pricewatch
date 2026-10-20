@@ -17,6 +17,7 @@
   <nav aria-label="Main navigation">
     <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}"><span>▦</span>Watchlist</a>
     <a href="/products/new" class="{{ 'active' if request.url.path == '/products/new' else '' }}"><span>+</span>Add product</a>
+    <a href="/outlet" class="{{ 'active' if request.url.path == '/outlet' else '' }}"><span>◈</span>Outlet</a>
     <a href="/alerts" class="{{ 'active' if request.url.path == '/alerts' else '' }}"><span>◉</span>Activity</a>
     <a href="/settings" class="{{ 'active' if request.url.path == '/settings' else '' }}"><span>⚙</span>Settings</a>
   </nav>

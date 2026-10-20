@@ -12,6 +12,7 @@ from app.schemas.domain import now
 from app.services.discovery import DiscoveryService
 from app.services.monitoring import MonitoringService
 from app.services.notifications import NotificationService
+from app.services.outlet import OutletService
 from app.services.queries import QueryService
 from app.services.rules import RuleService
 from app.services.settings import SettingsService
@@ -29,6 +30,7 @@ class Runtime:
         self.notifications = NotificationService(db, self.settings)
         self.discovery = DiscoveryService(db, self.registry, self.settings)
         self.monitor = MonitoringService(db, self.registry, self.settings, self.notifications)
+        self.outlet = OutletService(db, self.registry, self.notifications)
         self.queries = QueryService(db)
         self.tasks: set[asyncio.Task] = set()
         self.scheduler = AsyncIOScheduler(timezone="UTC")
@@ -72,7 +74,8 @@ class Runtime:
             self.scheduler.start()
 
     async def tick(self):
-        await self.spawn(self.monitor.run())
+        # Both share the fetcher, so a store's pacing and cooldown hold across them.
+        await asyncio.gather(self.spawn(self.monitor.run()), self.spawn(self.outlet.run()))
 
     async def close(self):
         if self.scheduler.running:

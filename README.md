@@ -10,6 +10,7 @@ A self-hosted price monitor for a small homelab. Python 3.12+, FastAPI, SQLite, 
 - Product editing, pause/resume, individual listing controls (enable, check interval, confirm price), per-product/global checks, and removal to a recoverable archive.
 - Scheduled checks, a history row on every successful check, Chart.js series/ranges, threshold/availability/discovery events, read state, and durable ntfy delivery retries.
 - Global, per-store and per-listing polling, store price rules, request settings, proxy and optional browser fallback through the UI.
+- An **Outlet** tab that follows whole outlet or category pages (Worten for now): every product with its price, kept as **Out of stock** when it leaves the page, a bell per product, and name alerts for new arrivals.
 - Local frontend assets, SQLite migrations, structured logs, Docker Compose deployment, online backups, and fixture-backed tests.
 
 ## Retailer coverage
@@ -161,6 +162,7 @@ app/
   schemas/        Typed identities, snapshots, match results and preferences
   models/         SQLAlchemy persistence model
   services/       Use cases: discovery, matching, monitoring, alerts, queries
+    outlet.py     Outlet pages: read, fold into products, bell and name alerts
     rules.py      Per-store price rules taught by confirming a price
   retailers/      Isolated storefront adapters, registry, parsing and HTTP I/O
     generic.py    Reader for any other public store: rule, structured data, meta tags, heuristic
@@ -216,6 +218,19 @@ To watch another store for a product you already track, paste the link into **Ad
 
 Removing a product archives it and stops checks without deleting history. Disabling a listing also preserves its history. Discovery is initiated from Add Product, Find / add listings, or **Add link** on the product page; periodic polling checks known offers and does not continuously enumerate new ones. Pending discoveries interrupted by a restart become retryable failures.
 
+## Outlet
+
+The **Outlet** tab follows whole store pages, such as `https://www.worten.pt/outlet/tv-video-e-som/tvs`, instead of single products. Paste the page under **Pages**; it is read straight away and then every 30 minutes (5–10080, per page, ±5% jitter) on the same scheduler, request pacing and store cooldowns as the watchlist. **Check now** reads it at once. Outlet products are separate from the watchlist.
+
+- **Products** lists everything the page has listed: price, the struck-through price before the outlet discount, the previous and lowest price seen. Products in stock come first, newest arrivals on top. A product that leaves the page (or is listed as sold out) is marked **Out of stock** and kept at the bottom; it goes back to in stock if it returns.
+- **The bell** on a product alerts on every price drop, on it going out of stock and on it coming back.
+- **Name alerts** alert when a product whose name contains the text appears on any followed page, or comes back to it, e.g. `85C7L`, `OLED77` or `LG 55QN8500`. Case, spaces and punctuation are ignored. Products already listed when the alert is created do not alert; the alert shows how many are in stock now.
+- The first read of a page records what is there without alerting. A read only changes stock when it is complete: a failed request, a changed response, or a page that suddenly lists nothing keeps the last known stock and shows the error under the page.
+
+Outlet events (`outlet new`, `outlet back`, `outlet price drop`, `outlet out of stock`) appear in Activity, linked to the product's row, and are pushed through ntfy like the others. Removing a page deletes its products and their price changes; their events stay in Activity. Outlet pages are not part of the watchlist export.
+
+Pages are read by the store's adapter (`fetch_feed`). Worten's page sends no products in its HTML: its script asks the storefront search API for the category the page names, 48 at a time, and pricewatch does the same. Other stores answer "Outlet pages from this store aren't supported yet".
+
 ## Configuration and ntfy
 
 All retailer, polling, condition and ntfy settings can be configured through the Web UI. Environment variables are prefixed `PRICEWATCH_`; see [.env.example](.env.example). Compose passes optional logging/scheduler overrides from `.env` if present; copying that file is optional. It fixes the data directory at `/var/lib/pricewatch`. Other application environment overrides can be added explicitly in a local Compose override. Native development still loads `.env` directly.
@@ -245,6 +260,8 @@ Start by pasting a product link: the generic adapter reads any public store, and
 4. Register the class in `Registry`. It automatically appears in settings and discovery forms, and new links to its hosts go to it instead of the generic reader. Listings already saved from that store stay generic.
 5. Save minimal public HTML/JSON fixtures, document whether they are live or synthetic, and test search, identity, stock, prices, sellers and conditions. Check that unrelated recommendation widgets do not become the main product.
 6. Start with `status = "partial"` and an honest `status_note`. Validate live behavior before calling an adapter supported.
+
+To follow a store's outlet or category pages, set `feed_pattern` (the page paths the reader accepts) and implement `fetch_feed(url)`, returning a `FeedItem` (store id, title, product URL, price, price before discount, in stock) for every product across all of the page's pages. Raise `ScrapeError` unless the read is complete, because a missing product is taken as out of stock.
 
 For another notification destination, implement the `NotificationProvider.send` contract and wire the provider factory through `NotificationService`. For richer categories, extend identity extraction and fixtures, keeping conflicting identifiers authoritative. Add schema changes with `alembic revision --autogenerate -m 'description'`, inspect the migration, and apply it with `python -m app.migrate`.
 

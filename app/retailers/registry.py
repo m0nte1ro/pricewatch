@@ -1,7 +1,7 @@
 from urllib.parse import urlsplit
 
 from app.retailers.amazon_es import AmazonESAdapter
-from app.retailers.base import RetailerAdapter
+from app.retailers.base import FEED_UNSUPPORTED, RetailerAdapter
 from app.retailers.darty import DartyAdapter
 from app.retailers.fnac import FnacAdapter
 from app.retailers.generic import PUBLIC_ONLY, GenericAdapter, public_host, store_key
@@ -59,3 +59,11 @@ class Registry:
         if not (public_host(host) and public_host(store_key(host))):
             raise ScrapeError(PUBLIC_ONLY)
         return self[store_key(host)]
+
+    def for_feed(self, url: str) -> RetailerAdapter:
+        adapter = self.for_url(url)
+        if not adapter.feed_pattern:
+            raise ScrapeError(FEED_UNSUPPORTED)
+        if not adapter.is_feed_url(adapter.normalize_url(url)):
+            raise ScrapeError(f"Use a {adapter.label} category or outlet page link")
+        return adapter

@@ -17,6 +17,8 @@ from app.services.matching import normalize
 
 log = logging.getLogger(__name__)
 
+# A new product matching a name alert, or a belled one selling out; the rest is Activity.
+PUSHED = {"outlet_new", "outlet_out_of_stock"}
 # Sortable columns of the tab, by the item attribute they sort on.
 SORTS = {"price": "deal_price", "size": "size"}
 WORD = re.compile(r"[A-Z0-9]+")
@@ -85,6 +87,7 @@ def emit(session, item: OutletItem, event: str, message: str):
             old_price=item.previous_price,
             new_price=item.deal_price,
             message=f"{message} · {item.title} · {offer_text(item)}",
+            notification_state="pending" if event in PUSHED else "skipped",
         )
     )
     log.info("alert_triggered", extra={"event_type": event})

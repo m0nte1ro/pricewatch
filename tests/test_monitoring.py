@@ -93,6 +93,43 @@ def test_allowed_grade_a_and_initial_threshold(db, candidate):
     }
 
 
+def pushed(db):
+    with db.session() as session:
+        return list(
+            session.scalars(
+                select(Alert.event_type)
+                .where(Alert.notification_state == "pending")
+                .order_by(Alert.id)
+            )
+        )
+
+
+def test_only_threshold_crossings_are_pushed(db, candidate):
+    create_product(db, candidate)
+    snapshot = candidate.listing.model_copy(deep=True)
+    snapshot.price = Decimal("999")
+    update(db, snapshot)
+    snapshot.availability = "out_of_stock"
+    update(db, snapshot)
+    snapshot.availability = "in_stock"
+    update(db, snapshot)
+    snapshot.price = Decimal("850")
+    update(db, snapshot)
+    snapshot.price = Decimal("790")
+    update(db, snapshot)
+    # Drops above the target and stock changes stay in Activity without a push.
+    assert events(db)[1:] == [
+        "price_dropped",
+        "became_unavailable",
+        "became_available",
+        "price_dropped",
+        "target_hit",
+        "price_dropped",
+        "insane_deal",
+    ]
+    assert pushed(db) == ["target_hit", "insane_deal"]
+
+
 def test_availability_transition_and_currency_safety(db, candidate):
     product_id = create_product(db, candidate)
     snapshot = candidate.listing.model_copy(deep=True)

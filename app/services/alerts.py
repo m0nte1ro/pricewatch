@@ -5,6 +5,8 @@ from app.models import Alert, Listing, Product
 from app.schemas.domain import Condition, Snapshot
 
 log = logging.getLogger(__name__)
+# Only a price at or under a threshold the owner set is worth a push; the rest is Activity.
+PUSHED = {"target_hit", "insane_deal"}
 
 
 def emit(
@@ -15,7 +17,6 @@ def emit(
     old: Decimal | None,
     new: Decimal | None,
     *,
-    push: bool = True,
     unconfirmed: bool = False,
     code: str | None = None,
     via: str | None = None,
@@ -42,7 +43,7 @@ def emit(
             old_price=old,
             new_price=new,
             message=message,
-            notification_state="pending" if push else "skipped",
+            notification_state="pending" if event in PUSHED else "skipped",
         )
     )
     log.info(
@@ -60,7 +61,7 @@ def evaluate(
     # Stock events fire on heuristic readings too; their price must not read as a known one.
     unconfirmed = snapshot.method == "heuristic"
     if initial:
-        # Listings are only added after the user confirms them, so record without a push.
+        # Listings are only added after the user confirms them: recorded, never pushed.
         event = (
             "new_listing"
             if snapshot.condition in (Condition.NEW, Condition.UNKNOWN)
@@ -73,7 +74,6 @@ def evaluate(
             event,
             None,
             new,
-            push=False,
             unconfirmed=unconfirmed,
             code=code,
             via=snapshot.offered_by,

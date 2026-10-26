@@ -245,6 +245,34 @@ def test_a_belled_product_alerts_on_drops_out_of_stock_and_return(db, feed):
     assert (item.lowest_price, item.out_of_stock_since) == (Decimal("850.00"), None)
 
 
+def pushed(db) -> list[str]:
+    with db.session() as session:
+        return list(
+            session.scalars(
+                select(Alert.event_type)
+                .where(Alert.notification_state == "pending")
+                .order_by(Alert.id)
+            )
+        )
+
+
+def test_only_new_name_alert_matches_and_belled_products_selling_out_are_pushed(db, feed):
+    read(db, feed, [tv("1", "TV A", "900"), tv("2", "TV LG OLED77C4")])
+    bell(db, "1")
+    rule(db, "OLED77")
+    read(db, feed, [tv("1", "TV A", "800")])
+    read(db, feed, [tv("2", "TV LG OLED77C4"), tv("3", "TV LG OLED77B4")])
+    read(db, feed, [tv("1", "TV A", "800"), tv("3", "TV LG OLED77B4")])
+    assert [event for event, _ in alerts(db)] == [
+        "outlet_price_drop",
+        "outlet_back",
+        "outlet_new",
+        "outlet_out_of_stock",
+        "outlet_back",
+    ]
+    assert pushed(db) == ["outlet_new", "outlet_out_of_stock"]
+
+
 def test_a_product_listed_as_sold_out_counts_as_out_of_stock(db, feed):
     read(db, feed, [tv("1", "TV A")])
     bell(db, "1")

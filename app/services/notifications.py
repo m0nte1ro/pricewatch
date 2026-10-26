@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.models import Alert
 from app.notifications.ntfy import NtfyProvider
 from app.schemas.domain import now
+from app.services.alerts import BUY_NOW
 
 log = logging.getLogger(__name__)
 
@@ -41,10 +42,11 @@ class NotificationService:
             state = "skipped"
             if provider:
                 try:
+                    urgent = alert.event_type == "insane_deal"
                     await provider.send(
-                        f"Pricewatch · {alert.event_type.replace('_', ' ')}",
+                        BUY_NOW if urgent else f"Pricewatch · {alert.event_type.replace('_', ' ')}",
                         alert.message,
-                        urgent=alert.event_type == "insane_deal",
+                        urgent=urgent,
                     )
                     state = "sent"
                 except Exception:

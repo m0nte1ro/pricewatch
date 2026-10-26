@@ -44,6 +44,12 @@ _Updated 2026-10-20_
 
 ## Log
 
+### 2026-10-26
+- **Did:** (branch `threshold-only-notifications`) pushes only for what the user asked: watchlist `target_hit` / `insane_deal` (price at or under a set threshold); outlet `outlet_new` (new product matching a name alert) and `outlet_out_of_stock` on a belled product. Price drops, stock changes and outlet returns are still recorded in Activity as `skipped`. The event type decides (`PUSHED` in `alerts.py` and `outlet.py`); `emit`'s `push` flag is gone. Bell tooltip and README updated. 2 tests, 349 pass.
+- **User said:** "only trigger notifications on items that hit the threshold set"; outlet: "a new option matching the created filters or an item with the bell activated getting sold. no more, no less."
+- **Decided:** keep the other events in Activity (unpushed) rather than drop them, like confirmed new listings already were.
+- **Follow-up:** insane deals push as "BUY NOW INSANE DEAL!!!!!!!" (ntfy title and message prefix, priority 5); target hits stay "Pricewatch · target hit". A reading under both thresholds pushes only the insane deal; the target hit is kept in Activity as `skipped`. User: "target price triggers a notification and insane deal issues a 'BUY NOW INSANE DEAL!!!!!!!' notification", then PR, merge, back on `main`.
+
 ### 2026-10-20
 - **Did:**
   - Outlet tab (branch `outlet-feeds`): follows whole store pages through a new adapter method `fetch_feed` (Worten first), lists every product, keeps those that leave the page as Out of stock at the bottom, a bell per product (price drops, out of stock, back), and name alerts (substring of the product name) for new or returning products. Migration `d167a74d6277` (outlet tables; `alerts.product_id` nullable, `alerts.outlet_item_id`). 16 tests, 294 pass.

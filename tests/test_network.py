@@ -197,6 +197,28 @@ async def test_alerts_saved_during_delivery_are_sent_in_the_same_run(db):
     assert sent == ["first", "second"]
 
 
+async def test_an_insane_deal_is_sent_as_buy_now_and_urgent(db):
+    settings = SettingsService(db)
+    settings.save(Preferences(ntfy_topic="topic"))
+    with db.session() as session:
+        product = Product(canonical_name="TV")
+        session.add(product)
+        session.flush()
+        session.add(Alert(product_id=product.id, event_type="target_hit", message="TV"))
+        session.add(Alert(product_id=product.id, event_type="insane_deal", message="TV"))
+    sent = []
+
+    class Provider:
+        def __init__(self, prefs):
+            pass
+
+        async def send(self, title, message, urgent=False):
+            sent.append((title, urgent))
+
+    await NotificationService(db, settings, Provider).deliver()
+    assert sent == [("Pricewatch · target hit", False), ("BUY NOW INSANE DEAL!!!!!!!", True)]
+
+
 async def test_interactive_requests_do_not_sit_through_rate_limit_waits(db):
     # Someone is watching a spinner: a 429 fails at once instead of waiting 60 s twice.
     calls = []

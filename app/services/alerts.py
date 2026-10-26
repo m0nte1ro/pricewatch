@@ -5,6 +5,9 @@ from app.models import Alert, Listing, Product
 from app.schemas.domain import Condition, Snapshot
 
 log = logging.getLogger(__name__)
+# Only a price at or under a threshold the owner set is worth a push; the rest is Activity.
+PUSHED = {"target_hit", "insane_deal"}
+BUY_NOW = "BUY NOW INSANE DEAL!!!!!!!"
 
 
 def emit(
@@ -15,11 +18,10 @@ def emit(
     old: Decimal | None,
     new: Decimal | None,
     *,
-    push: bool = True,
     unconfirmed: bool = False,
     code: str | None = None,
     via: str | None = None,
-):
+) -> Alert:
     prices = (
         f"{old if old is not None else '—'} → {new if new is not None else '—'} {listing.currency}"
     )
@@ -29,26 +31,29 @@ def emit(
         prices += f" via {via}"
     if unconfirmed:
         prices += " (price unconfirmed)"
-    message = f"{event.replace('_', ' ').upper()} · {product.canonical_name} · {listing.retailer} · {listing.condition} · {prices}"
+    label = BUY_NOW if event == "insane_deal" else event.replace("_", " ").upper()
+    message = (
+        f"{label} · {product.canonical_name} · {listing.retailer} · {listing.condition} · {prices}"
+    )
     if event == "target_hit":
         message += f" · Target: {product.target_price} EUR"
     if event == "insane_deal":
         message += f" · Insane threshold: {product.insane_deal_price} EUR"
-    session.add(
-        Alert(
-            product_id=product.id,
-            listing_id=listing.id,
-            event_type=event,
-            old_price=old,
-            new_price=new,
-            message=message,
-            notification_state="pending" if push else "skipped",
-        )
+    alert = Alert(
+        product_id=product.id,
+        listing_id=listing.id,
+        event_type=event,
+        old_price=old,
+        new_price=new,
+        message=message,
+        notification_state="pending" if event in PUSHED else "skipped",
     )
+    session.add(alert)
     log.info(
         "alert_triggered",
         extra={"product_id": product.id, "listing_id": listing.id, "event_type": event},
     )
+    return alert
 
 
 def evaluate(
@@ -60,7 +65,7 @@ def evaluate(
     # Stock events fire on heuristic readings too; their price must not read as a known one.
     unconfirmed = snapshot.method == "heuristic"
     if initial:
-        # Listings are only added after the user confirms them, so record without a push.
+        # Listings are only added after the user confirms them: recorded, never pushed.
         event = (
             "new_listing"
             if snapshot.condition in (Condition.NEW, Condition.UNKNOWN)
@@ -73,7 +78,6 @@ def evaluate(
             event,
             None,
             new,
-            push=False,
             unconfirmed=unconfirmed,
             code=code,
             via=snapshot.offered_by,
@@ -120,6 +124,7 @@ def evaluate(
         emit(
             session, product, listing, "price_dropped", old, new, code=code, via=snapshot.offered_by
         )
+    crossed = []
     for threshold, event in (
         (product.target_price, "target_hit"),
         (product.insane_deal_price, "insane_deal"),
@@ -129,4 +134,9 @@ def evaluate(
             and new <= threshold
             and (not previously_eligible or old is None or old > threshold)
         ):
-            emit(session, product, listing, event, old, new, code=code, via=snapshot.offered_by)
+            crossed.append(
+                emit(session, product, listing, event, old, new, code=code, via=snapshot.offered_by)
+            )
+    if len(crossed) == 2:
+        # One reading under both thresholds is one deal: push only the insane one.
+        crossed[0].notification_state = "skipped"

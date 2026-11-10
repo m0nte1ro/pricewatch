@@ -139,7 +139,9 @@ class MarketService:
         # A listing two searches find is still one listing: keep the first search's row.
         provider = {search.id: search.provider for search in searches}
         rows = list(
-            {(provider[row.search_id], row.listing_id): row for row in reversed(everything)}.values()
+            {
+                (provider[row.search_id], row.listing_id): row for row in reversed(everything)
+            }.values()
         )
         rows.sort(key=lambda row: row.posted_at or row.first_seen_at, reverse=True)
         if sort.removeprefix("-") == "price":

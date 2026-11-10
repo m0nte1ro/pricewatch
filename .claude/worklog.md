@@ -44,6 +44,12 @@ _Updated 2026-10-20_
 
 ## Log
 
+### 2026-11-10
+- **Did:** (branch `marketplace`) Marketplace tab: follow second-hand searches, push every new listing. Providers in `app/marketplaces/` (`Marketplace` base, `Marketplaces` registry, Wallapop first); `MarketService` in `services/market.py`; `market_searches` / `market_listings` tables, `alerts.market_listing_id` (migration `e3a1f0c7b912`). Wallapop is read from `api.wallapop.com/api/v3/search` (plain HTTP/2 with `X-DeviceOS: 0`, one page of ~40, forced `order_by=newest`); one manual live probe, reduced into `tests/fixtures/wallapop_search_live.json`. ntfy notifications now carry a `click` URL for marketplace finds. `Fetcher.get` takes extra headers.
+- **User said:** "add a section where I can monitor new listings on Wallapop (olx would be a bonus ... make it modular)". Chose: paste the marketplace's search URL; push every new listing; Madrid when the link has no location.
+- **Decided:** no stock tracking (results are one page, newest first, so absence means nothing); 500 listings kept per search; price changes kept as "Down from" without an alert; a listing found by two searches shows once.
+- **Left open:** tests and ruff not run: this machine has no pip/venv (`python3.12-venv` missing) and fetching `uv` was blocked. Container rebuild needed for the migration. OLX provider not written.
+
 ### 2026-10-26
 - **Did:** (branch `threshold-only-notifications`) pushes only for what the user asked: watchlist `target_hit` / `insane_deal` (price at or under a set threshold); outlet `outlet_new` (new product matching a name alert) and `outlet_out_of_stock` on a belled product. Price drops, stock changes and outlet returns are still recorded in Activity as `skipped`. The event type decides (`PUSHED` in `alerts.py` and `outlet.py`); `emit`'s `push` flag is gone. Bell tooltip and README updated. 2 tests, 349 pass.
 - **User said:** "only trigger notifications on items that hit the threshold set"; outlet: "a new option matching the created filters or an item with the bell activated getting sold. no more, no less."

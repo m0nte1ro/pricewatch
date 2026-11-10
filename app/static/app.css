@@ -4,6 +4,7 @@
 .nowrap{white-space:nowrap}
 .badge.outlet_new,.badge.outlet_back,.badge.outlet_price_drop{color:var(--accent);background:#233b32}
 .badge.outlet_out_of_stock{color:#e6a0a2;background:#3d2931}
+.badge.market_new{color:var(--accent);background:#233b32}
 .outlet-manage{margin-bottom:6px}
 .outlet-manage details.panel{padding:0 20px;margin-bottom:14px}
 .outlet-manage summary{display:flex;align-items:center;gap:8px;margin:0;padding:16px 0;font-weight:600;color:var(--text)}
@@ -61,6 +62,7 @@
 .filter-fields label{margin:10px 0 4px}
 .filters-panel .check-row{margin:10px 0 0}
 #outlet-products.htmx-request{opacity:.6;transition:opacity .15s}
+#market-listings.htmx-request{opacity:.6;transition:opacity .15s}
 .sorter{color:inherit;white-space:nowrap}
 .sorter span{opacity:.6}
 .sorter:hover,.sorter.active{color:var(--accent)}
@@ -70,6 +72,7 @@
 .bell-cell{width:52px;padding-right:0!important}
 .outlet-product{display:flex;align-items:center;gap:14px;min-width:300px}
 .thumb{flex-shrink:0;display:block;width:64px;height:48px;border-radius:6px;background:#e7eaee;object-fit:contain;padding:3px}
+.thumb.photo{object-fit:cover;padding:0;background:#222a35}
 .outlet-product a{font-weight:600;color:#e4ebf3}
 .outlet-product a:hover{color:var(--accent)}
 .outlet-product small{max-width:none}

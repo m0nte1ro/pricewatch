@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.models import Alert
+from app.models import Alert, MarketListing
 from app.notifications.ntfy import NtfyProvider
 from app.schemas.domain import now
 from app.services.alerts import BUY_NOW
@@ -35,6 +35,14 @@ class NotificationService:
                 .limit(25)
             ).all()
 
+    def link(self, alert: Alert) -> str | None:
+        """A marketplace find opens the listing itself: those go fast."""
+        if alert.market_listing_id is None:
+            return None
+        with self.db.session() as session:
+            row = session.get(MarketListing, alert.market_listing_id)
+            return row.url if row else None
+
     async def _send(self, alerts: list[Alert]):
         prefs = self.settings.get()
         provider = self.provider_factory(prefs) if prefs.ntfy_topic else None
@@ -47,6 +55,7 @@ class NotificationService:
                         BUY_NOW if urgent else f"Pricewatch · {alert.event_type.replace('_', ' ')}",
                         alert.message,
                         urgent=urgent,
+                        click=self.link(alert),
                     )
                     state = "sent"
                 except Exception:

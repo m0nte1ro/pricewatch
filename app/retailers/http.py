@@ -98,7 +98,13 @@ class Fetcher:
             raise ScrapeError("Only HTTPS URLs on this retailer's supported domains are allowed")
 
     async def get(
-        self, url: str, retailer: str, hosts: tuple[str, ...], *, json_body: dict | None = None
+        self,
+        url: str,
+        retailer: str,
+        hosts: tuple[str, ...],
+        *,
+        json_body: dict | None = None,
+        headers: dict[str, str] | None = None,
     ) -> str:
         self.validate_url(url, hosts)
         prefs: Preferences = self.get_preferences()
@@ -115,6 +121,7 @@ class Fetcher:
                     "User-Agent": prefs.user_agent,
                     "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
                     "Accept-Language": "pt-PT,pt;q=0.9,es;q=0.8,en;q=0.7",
+                    **(headers or {}),
                 },
             ) as client:
                 spacing = max(self.min_delay, self.intervals.get(retailer, 0))

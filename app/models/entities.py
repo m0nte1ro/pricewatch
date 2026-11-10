@@ -127,6 +127,9 @@ class Alert(Base):
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), index=True)
     listing_id: Mapped[int | None] = mapped_column(ForeignKey("listings.id"))
     outlet_item_id: Mapped[int | None] = mapped_column(ForeignKey("outlet_items.id"), index=True)
+    market_listing_id: Mapped[int | None] = mapped_column(
+        ForeignKey("market_listings.id"), index=True
+    )
     event_type: Mapped[str] = mapped_column(String(50))
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     old_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
@@ -274,3 +277,47 @@ class OutletRule(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     text: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class MarketSearch(Base):
+    """A marketplace search, read newest first on a schedule for listings not seen before."""
+
+    __tablename__ = "market_searches"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    url: Mapped[str] = mapped_column(Text, unique=True)
+    # What the search looks for, e.g. "ps5 · up to €300", from the link when it was added.
+    label: Mapped[str] = mapped_column(String(200))
+    check_interval_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    next_check_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    # The last successful read; None until the first one, which records without alerting.
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    listings: Mapped[list["MarketListing"]] = relationship(
+        back_populates="search", cascade="all, delete-orphan"
+    )
+
+
+class MarketListing(Base):
+    __tablename__ = "market_listings"
+    __table_args__ = (
+        UniqueConstraint("search_id", "listing_id", name="uq_market_listings_search_listing"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    search_id: Mapped[int] = mapped_column(ForeignKey("market_searches.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(String(150))
+    title: Mapped[str] = mapped_column(String(500))
+    url: Mapped[str] = mapped_column(Text)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    previous_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    image_url: Mapped[str | None] = mapped_column(Text)
+    place: Mapped[str | None] = mapped_column(String(150))
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    reserved: Mapped[bool] = mapped_column(Boolean, default=False)
+    ships: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Arrived after the search's first read, so it was announced as new.
+    announced: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    search: Mapped[MarketSearch] = relationship(back_populates="listings")

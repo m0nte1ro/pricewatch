@@ -182,7 +182,7 @@ async def test_alerts_saved_during_delivery_are_sent_in_the_same_run(db):
         def __init__(self, prefs):
             pass
 
-        async def send(self, title, message, urgent=False):
+        async def send(self, title, message, urgent=False, click=None):
             sent.append(message)
             if message == "first":
                 # A second confirmation saves an alert and asks for delivery mid-send.
@@ -212,7 +212,7 @@ async def test_an_insane_deal_is_sent_as_buy_now_and_urgent(db):
         def __init__(self, prefs):
             pass
 
-        async def send(self, title, message, urgent=False):
+        async def send(self, title, message, urgent=False, click=None):
             sent.append((title, urgent))
 
     await NotificationService(db, settings, Provider).deliver()

@@ -1,0 +1,93 @@
+{
+ "data": {
+  "section": {
+   "type": "organic_search_results",
+   "payload": {
+    "title": "Encontra o que procuras",
+    "items": [
+     {
+      "id": "pj943gwle26e",
+      "title": "Hellraiser Revival Day One Edition NOVO LACREADO",
+      "price": {
+       "amount": 60.0,
+       "currency": "EUR"
+      },
+      "images": [
+       {
+        "urls": {
+         "small": "https://cdn.wallapop.com/images/10420/lv/pt/__/c10420p1323061913/i6858922160.jpg?pictureSize=W320"
+        }
+       }
+      ],
+      "reserved": {
+       "flag": false
+      },
+      "location": {
+       "city": "Barcelona",
+       "country_code": "ES"
+      },
+      "shipping": {
+       "user_allows_shipping": true
+      },
+      "web_slug": "hellraiser-revival-day-one-edition-nuevo-precintad-1323061913",
+      "created_at": 1794352685667
+     },
+     {
+      "id": "e65qx3nl7m6o",
+      "title": "Controle DualSense Edge para PS5",
+      "price": {
+       "amount": 108.0,
+       "currency": "EUR"
+      },
+      "images": [
+       {
+        "urls": {
+         "small": "https://cdn.wallapop.com/images/10420/lv/pt/__/c10420p1323061800/i6858915886.jpg?pictureSize=W320"
+        }
+       }
+      ],
+      "reserved": {
+       "flag": true
+      },
+      "location": {
+       "city": "Roa",
+       "country_code": "ES"
+      },
+      "shipping": {
+       "user_allows_shipping": true
+      },
+      "web_slug": "mando-dualsense-edge-para-ps5-1323061800",
+      "created_at": 1794352636910
+     },
+     {
+      "id": "wzvgwlo59qzl",
+      "title": "3 jogos ps5",
+      "price": {
+       "amount": 39.0,
+       "currency": "EUR"
+      },
+      "images": [
+       {
+        "urls": {
+         "small": "https://cdn.wallapop.com/images/10420/lv/ps/__/c10420p1323061641/i6858910579.jpg?pictureSize=W320"
+        }
+       }
+      ],
+      "reserved": {
+       "flag": true
+      },
+      "location": {
+       "city": "Madrid",
+       "country_code": "ES"
+      },
+      "shipping": {
+       "user_allows_shipping": true
+      },
+      "web_slug": "3-juegos-ps5-1323061641",
+      "created_at": 1794352573512
+     }
+    ]
+   }
+  }
+ }
+}

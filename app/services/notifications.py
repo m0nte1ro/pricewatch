@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
+import httpx
 from sqlalchemy import select
 
 from app.models import Alert, MarketListing
@@ -10,6 +11,16 @@ from app.schemas.domain import now
 from app.services.alerts import BUY_NOW
 
 log = logging.getLogger(__name__)
+
+
+class DeliveryError(Exception):
+    """Why a notification could not be sent, in words for the owner."""
+
+
+def title(event_type: str) -> str:
+    if event_type == "insane_deal":
+        return BUY_NOW
+    return f"Pricewatch · {event_type.replace('_', ' ')}"
 
 
 class NotificationService:
@@ -35,6 +46,27 @@ class NotificationService:
                 .limit(25)
             ).all()
 
+    async def send_now(self, event_type: str, message: str, click: str | None = None):
+        """Send one notification straight away, outside Activity; DeliveryError if it can't."""
+        prefs = self.settings.get()
+        if not prefs.ntfy_topic:
+            raise DeliveryError("Set an ntfy topic in Settings first")
+        try:
+            await self.provider_factory(prefs).send(
+                title(event_type), message, urgent=event_type == "insane_deal", click=click
+            )
+        except httpx.HTTPStatusError as exc:
+            raise DeliveryError(
+                f"ntfy refused it (HTTP {exc.response.status_code}); check the topic and token in Settings"
+            ) from None
+        except ValueError:
+            raise DeliveryError("The ntfy server URL in Settings is not valid") from None
+        except Exception:
+            log.warning("notification_delivery_failed", extra={"event_type": event_type})
+            raise DeliveryError(
+                "Couldn't reach the ntfy server; check its URL in Settings"
+            ) from None
+
     def link(self, alert: Alert) -> str | None:
         """A marketplace find opens the listing itself: those go fast."""
         if alert.market_listing_id is None:
@@ -50,11 +82,10 @@ class NotificationService:
             state = "skipped"
             if provider:
                 try:
-                    urgent = alert.event_type == "insane_deal"
                     await provider.send(
-                        BUY_NOW if urgent else f"Pricewatch · {alert.event_type.replace('_', ' ')}",
+                        title(alert.event_type),
                         alert.message,
-                        urgent=urgent,
+                        urgent=alert.event_type == "insane_deal",
                         click=self.link(alert),
                     )
                     state = "sent"

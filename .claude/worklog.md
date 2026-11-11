@@ -53,6 +53,7 @@ _Updated 2026-10-20_
 - **Follow-up (user):** "set my default location to Porto and make sure every listing has shipping enabled ... checks every hour". Default location Porto; every read sends `is_shippable=true` (live-checked: 40/40 shippable) and drops listings without both shipping flags; default interval 60 min. 370 pass.
 - **User reported (deployed):** zidoo search shows 0 listings while Wallapop's site shows ~10. Newest-first only covers the last day. Now a search with no listings also reads Wallapop's relevance order (`fetch_listings(newest=False)`) and records it without alerting; new listings on the newest page are still announced. Empty-state text no longer says "Nothing matches" when there is nothing at all. Live: the user's empty zidoo search filled with 10 shippable listings, 0 alerts. 373 pass.
 - **PR:** #10 (`marketplace`), pushed.
+- **User:** "make sure to have this sent notifications when new listings come". Pushes were already wired; added **Send a test ping** per search (newest listing through the real ntfy path, "TEST ·" prefix, not in Activity, names the failure: no topic / HTTP refusal / unreachable) and an end-to-end test (scheduled read → new listing → ntfy JSON with click). `NotificationService.send_now`, `title()`, `DeliveryError`. 378 pass. Not sent to the user's real ntfy: their install and topic aren't on this machine.
 - **Left open:** container rebuild for the migration; ntfy topic not tested end to end (scratch install has none); OLX provider not written; catch-up after >24 h downtime.
 
 ### 2026-10-26

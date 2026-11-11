@@ -11,11 +11,12 @@ import app.services.market as market
 from app.marketplaces.registry import Marketplaces
 from app.marketplaces.wallapop import CHANGED
 from app.models import Alert, MarketListing, MarketSearch
+from app.notifications.ntfy import NtfyProvider
 from app.retailers.http import Fetcher
 from app.retailers.parsing import ScrapeError
 from app.schemas.domain import MarketItem, Preferences, now
 from app.services.market import Filters, MarketService, apply
-from app.services.notifications import NotificationService
+from app.services.notifications import DeliveryError, NotificationService
 from app.services.settings import SettingsService
 from tests.conftest import FIXTURES
 from tests.test_web import form_data
@@ -412,3 +413,106 @@ def test_a_search_with_nothing_says_so_instead_of_blaming_the_filters(wallapop_s
     page = client.get("/market?search=1").text
     assert "Nothing listed yet." in page
     assert "Nothing matches." not in page
+
+
+def ntfy(status: int, sent: list):
+    """The real ntfy provider, answering every publish with this status."""
+
+    def respond(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(status)
+
+    return lambda prefs: NtfyProvider(prefs, transport=httpx.MockTransport(respond))
+
+
+def pinger(db, factory, topic: str = "pricewatch") -> MarketService:
+    settings = SettingsService(db)
+    settings.save(Preferences(ntfy_topic=topic))
+    return MarketService(
+        db, Marketplaces(Fetcher(None, None)), NotificationService(db, settings, factory)
+    )
+
+
+async def test_a_test_ping_sends_the_newest_listing_the_way_a_new_one_arrives(db, search):
+    read(db, search, [found("a", "PS5 Slim", "250")])
+    read(db, search, [found("b", "PS5 Pro", "420"), found("a", "PS5 Slim", "250")])
+    before, sent = alerts(db), []
+    await pinger(db, ntfy(200, sent)).test_ping(search)
+    assert sent == [
+        {
+            "topic": "pricewatch",
+            "title": "Pricewatch · market new",
+            "message": "TEST · NEW ON WALLAPOP · PS5 Pro · 420.00 EUR · Madrid · ps5 · up to €300",
+            "priority": 3,
+            "click": "https://es.wallapop.com/item/b",
+        }
+    ]
+    assert alerts(db) == before
+
+
+async def test_a_test_ping_says_why_it_was_not_sent(db, search):
+    read(db, search, [found("a")])
+    with pytest.raises(DeliveryError, match="Set an ntfy topic in Settings first"):
+        await pinger(db, ntfy(200, []), topic="").test_ping(search)
+    with pytest.raises(DeliveryError, match=r"ntfy refused it \(HTTP 403\)"):
+        await pinger(db, ntfy(403, [])).test_ping(search)
+
+    def unreachable(request):
+        raise httpx.ConnectError("refused")
+
+    factory = lambda prefs: NtfyProvider(prefs, transport=httpx.MockTransport(unreachable))  # noqa: E731
+    with pytest.raises(DeliveryError, match="Couldn't reach the ntfy server"):
+        await pinger(db, factory).test_ping(search)
+
+
+async def test_a_search_without_listings_has_nothing_to_test_with(db, search):
+    with pytest.raises(ScrapeError, match="no listing to send yet"):
+        await pinger(db, ntfy(200, [])).test_ping(search)
+
+
+def test_the_test_ping_button_confirms_what_was_sent(wallapop_site):
+    client, runtime, _, _ = wallapop_site
+    client.post("/market/searches", data=form_data(client, url=SEARCH_URL))
+    sent = []
+    runtime.notifications.provider_factory = ntfy(200, sent)
+    refused = client.post("/market/searches/1/ping", data=form_data(client))
+    assert refused.status_code == 422
+    assert "Set an ntfy topic in Settings first" in refused.text
+    runtime.settings.save(Preferences(ntfy_topic="pricewatch"))
+    response = client.post(
+        "/market/searches/1/ping", data=form_data(client), follow_redirects=False
+    )
+    assert (response.status_code, response.headers["location"]) == (303, "/market?pinged=1")
+    assert [message["message"][:22] for message in sent] == ["TEST · NEW ON WALLAPOP"]
+    page = client.get("/market?pinged=1").text
+    assert "Test notification sent for “ps5 · up to €300”" in page
+    assert "pinged=1" not in page.split("Test notification sent")[1]
+
+
+async def test_a_new_listing_reaches_ntfy_on_the_next_scheduled_read(db, search):
+    answer, sent = json.loads(SEARCH_JSON), []
+    items = answer["data"]["section"]["payload"]["items"]
+    provider = wallapop(db, lambda request: httpx.Response(200, json=answer))
+    settings = SettingsService(db)
+    settings.save(Preferences(ntfy_topic="pricewatch"))
+    service = MarketService(
+        db, {"wallapop": provider}, NotificationService(db, settings, ntfy(200, sent))
+    )
+    await service.run()
+    assert (len(rows(db)), sent) == (3, [])
+    new = {**items[0], "id": "zidoo1", "title": "Zidoo Z9X Pro", "web_slug": "zidoo-z9x-pro-1"}
+    items.insert(0, new)
+    with db.session() as session:
+        session.scalar(select(MarketSearch)).next_check_at = now()
+    await service.run()
+    assert sent == [
+        {
+            "topic": "pricewatch",
+            "title": "Pricewatch · market new",
+            "message": "NEW ON WALLAPOP · Zidoo Z9X Pro · 60.00 EUR · Barcelona · ps5 · up to €300",
+            "priority": 3,
+            "click": "https://es.wallapop.com/item/zidoo-z9x-pro-1",
+        }
+    ]
+    with db.session() as session:
+        assert session.scalars(select(Alert.notification_state)).all() == ["sent"]

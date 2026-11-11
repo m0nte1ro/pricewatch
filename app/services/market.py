@@ -64,13 +64,12 @@ def apply(
         if row is None:
             row = rows[reading.listing_id] = add(session, search, reading, announced=not first)
             if not first:
-                place = f" · {row.place}" if row.place else ""
                 session.add(
                     Alert(
                         market_listing_id=row.id,
                         event_type="market_new",
                         new_price=row.price,
-                        message=f"NEW ON {label.upper()} · {row.title} · {price_text(row.price)}{place} · {search.label}",
+                        message=announcement(label, search, row),
                     )
                 )
                 log.info("alert_triggered", extra={"event_type": "market_new"})
@@ -86,6 +85,11 @@ def apply(
             rows[reading.listing_id] = add(session, search, reading, announced=False)
     prune(session, search)
     search.last_read_at, search.last_error = now(), None
+
+
+def announcement(label: str, search: MarketSearch, row: MarketListing) -> str:
+    place = f" · {row.place}" if row.place else ""
+    return f"NEW ON {label.upper()} · {row.title} · {price_text(row.price)}{place} · {search.label}"
 
 
 def add(session, search: MarketSearch, reading: MarketItem, *, announced: bool) -> MarketListing:
@@ -179,6 +183,19 @@ class MarketService:
             "sort": sort,
             "filters": filters,
         }
+
+    async def test_ping(self, search_id: int):
+        """Send the search's newest listing the way a new one is sent, marked as a test."""
+        with self.db.session() as session:
+            search = session.get(MarketSearch, search_id)
+            rows = sorted(
+                search.listings, key=lambda row: row.posted_at or row.first_seen_at, reverse=True
+            )
+            if not rows:
+                raise ScrapeError("This search has no listing to send yet")
+            label = self.marketplaces[search.provider].label
+            message, url = announcement(label, search, rows[0]), rows[0].url
+        await self.notifications.send_now("market_new", f"TEST · {message}", click=url)
 
     async def read(self, search_id: int):
         with self.db.session() as session:

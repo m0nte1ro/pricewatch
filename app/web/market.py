@@ -8,6 +8,7 @@ from app.models import Alert, MarketListing, MarketSearch
 from app.retailers.http import user_waiting
 from app.retailers.parsing import ScrapeError, money
 from app.services.market import Filters
+from app.services.notifications import DeliveryError
 from app.web.common import full_https, protected, render
 
 router = APIRouter()
@@ -50,16 +51,26 @@ def filters(params) -> Filters:
 @router.get("/market")
 async def market_page(request: Request, sort: str = ""):
     params = request.query_params
+    pinged = params.get("pinged", "")
 
     def link(**changes) -> str:
         """This page's URL with some parameters changed; empty values drop out."""
-        query = {key: value for key, value in params.items() if key not in changes}
+        query = {
+            key: value for key, value in params.items() if key not in changes and key != "pinged"
+        }
         query.update({key: value for key, value in changes.items() if value})
         return "/market" + (f"?{urlencode(query)}" if query else "")
 
     runtime = request.app.state.runtime
     overview = runtime.market.overview(sort, filters(params))
-    return render(request, "market.html", **overview, link=link, providers=runtime.marketplaces)
+    return render(
+        request,
+        "market.html",
+        **overview,
+        link=link,
+        providers=runtime.marketplaces,
+        pinged=int(pinged) if pinged.isdigit() else None,
+    )
 
 
 @router.post("/market/searches", dependencies=[Depends(protected)])
@@ -105,6 +116,17 @@ async def check_search(request: Request, search_id: int):
     runtime = request.app.state.runtime
     await read_now(runtime, get_search(runtime, search_id))
     return RedirectResponse("/market", 303)
+
+
+@router.post("/market/searches/{search_id}/ping", dependencies=[Depends(protected)])
+async def test_ping(request: Request, search_id: int):
+    runtime = request.app.state.runtime
+    get_search(runtime, search_id)
+    try:
+        await runtime.market.test_ping(search_id)
+    except (ScrapeError, DeliveryError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return RedirectResponse(f"/market?pinged={search_id}", 303)
 
 
 @router.post("/market/searches/{search_id}/edit", dependencies=[Depends(protected)])

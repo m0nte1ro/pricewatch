@@ -51,6 +51,8 @@ _Updated 2026-10-20_
 - **Verified (user installed python3.12-venv):** suite, ruff, `alembic check` clean. Live on a scratch app (port 8090): `ps5` search read 40, a read 5 min later announced 5 new.
 - **Zidoo test:** zero results newest-first. Wallapop's `order_by=newest` pages are day windows (step 0 = last 24 h, each `next_page` steps one day back); a relevance search found ~16 Zidoo listings in all, newest 2026-09-13. So nothing recent, not a bug. Searches must be read at least daily, or listings posted during the gap are missed (offered a catch-up read; not built).
 - **Follow-up (user):** "set my default location to Porto and make sure every listing has shipping enabled ... checks every hour". Default location Porto; every read sends `is_shippable=true` (live-checked: 40/40 shippable) and drops listings without both shipping flags; default interval 60 min. 370 pass.
+- **User reported (deployed):** zidoo search shows 0 listings while Wallapop's site shows ~10. Newest-first only covers the last day. Now a search with no listings also reads Wallapop's relevance order (`fetch_listings(newest=False)`) and records it without alerting; new listings on the newest page are still announced. Empty-state text no longer says "Nothing matches" when there is nothing at all. Live: the user's empty zidoo search filled with 10 shippable listings, 0 alerts. 373 pass.
+- **PR:** #10 (`marketplace`), pushed.
 - **Left open:** container rebuild for the migration; ntfy topic not tested end to end (scratch install has none); OLX provider not written; catch-up after >24 h downtime.
 
 ### 2026-10-26

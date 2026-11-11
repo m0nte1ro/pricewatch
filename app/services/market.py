@@ -44,31 +44,25 @@ class Filters:
         return self != Filters()
 
 
-def apply(session, search: MarketSearch, label: str, found: list[MarketItem]):
+def apply(
+    session,
+    search: MarketSearch,
+    label: str,
+    found: list[MarketItem],
+    backdrop: list[MarketItem] = (),
+):
     """Fold a read of the search into its listings; one not seen before is news.
 
-    The first read records what is already there without alerting.
+    The first read records what is already there without alerting. `backdrop` is what the
+    marketplace lists regardless of age, recorded without alerting: it is not new, it only
+    shows what is there.
     """
     rows = {row.listing_id: row for row in search.listings}
     first = search.last_read_at is None
     for reading in found:
         row = rows.get(reading.listing_id)
         if row is None:
-            row = rows[reading.listing_id] = MarketListing(
-                search=search,
-                listing_id=reading.listing_id,
-                title=reading.title,
-                url=reading.url,
-                price=reading.price,
-                image_url=reading.image_url,
-                place=reading.place,
-                posted_at=reading.posted_at,
-                reserved=reading.reserved,
-                ships=reading.ships,
-                announced=not first,
-            )
-            session.add(row)
-            session.flush()
+            row = rows[reading.listing_id] = add(session, search, reading, announced=not first)
             if not first:
                 place = f" · {row.place}" if row.place else ""
                 session.add(
@@ -87,8 +81,30 @@ def apply(session, search: MarketSearch, label: str, found: list[MarketItem]):
         row.image_url = reading.image_url or row.image_url
         row.place, row.reserved, row.ships = reading.place, reading.reserved, reading.ships
         row.last_seen_at = now()
+    for reading in backdrop:
+        if reading.listing_id not in rows:
+            rows[reading.listing_id] = add(session, search, reading, announced=False)
     prune(session, search)
     search.last_read_at, search.last_error = now(), None
+
+
+def add(session, search: MarketSearch, reading: MarketItem, *, announced: bool) -> MarketListing:
+    row = MarketListing(
+        search=search,
+        listing_id=reading.listing_id,
+        title=reading.title,
+        url=reading.url,
+        price=reading.price,
+        image_url=reading.image_url,
+        place=reading.place,
+        posted_at=reading.posted_at,
+        reserved=reading.reserved,
+        ships=reading.ships,
+        announced=announced,
+    )
+    session.add(row)
+    session.flush()
+    return row
 
 
 def prune(session, search: MarketSearch):
@@ -170,10 +186,15 @@ class MarketService:
             if search is None:
                 return
             name, url = search.provider, search.url
+            # Newest first sees only the last day: a search with nothing yet also reads the
+            # site's own order once, to show what is there.
+            empty = not search.listings
         provider = self.marketplaces[name]
-        error, found = None, []
+        error, found, backdrop = None, [], []
         try:
             found = await provider.fetch_listings(url)
+            if empty:
+                backdrop = await provider.fetch_listings(url, newest=False)
         except ScrapeError as exc:
             error = str(exc)
         except Exception as exc:
@@ -189,7 +210,7 @@ class MarketService:
                 minutes=search.check_interval_minutes * random.uniform(0.95, 1.05)
             )
             if error is None:
-                apply(session, search, provider.label, found)
+                apply(session, search, provider.label, found, backdrop)
             else:
                 search.last_error = error
-        log.info("market_read", extra={"retailer": name, "count": len(found)})
+        log.info("market_read", extra={"retailer": name, "count": len(found) + len(backdrop)})

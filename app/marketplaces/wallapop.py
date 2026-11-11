@@ -66,14 +66,19 @@ class WallapopMarketplace(Marketplace):
         )
         return " · ".join(part for part in (query.get("keywords") or "a category", prices) if part)
 
-    async def fetch_listings(self, url: str) -> list[MarketItem]:
+    async def fetch_listings(self, url: str, *, newest: bool = True) -> list[MarketItem]:
         url = self.normalize_url(url)
         query = dict(parse_qsl(urlsplit(url).query))
         if not ("latitude" in query and "longitude" in query):
             query.update(PORTO)
-        # One page, newest first: what arrived since the last read is at the top. Only
-        # listings that ship: most sellers are in Spain.
-        query.update(order_by="newest", source="search_box", is_shippable="true")
+        # One page. Newest first covers only the last 24 hours, what arrived since the last
+        # read at the top; relevance is the site's own order, of any age. Only listings that
+        # ship: most sellers are in Spain.
+        query.update(
+            order_by="newest" if newest else "most_relevance",
+            source="search_box",
+            is_shippable="true",
+        )
         raw = await self.fetcher.get(
             f"{SEARCH_API}?{urlencode(query)}", self.name, API_HOSTS, headers=API_HEADERS
         )

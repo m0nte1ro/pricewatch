@@ -22,6 +22,11 @@ from tests.test_web import form_data
 
 SEARCH_URL = "https://es.wallapop.com/search?keywords=ps5&max_sale_price=300"
 SEARCH_JSON = (FIXTURES / "wallapop_search_live.json").read_text()
+NOTHING_JSON = {"data": {"section": {"payload": {"items": []}}}}
+
+
+def order(url) -> str:
+    return dict(parse_qsl(httpx.URL(str(url)).query.decode()))["order_by"]
 
 
 def wallapop(db=None, respond=None):
@@ -264,7 +269,8 @@ def test_following_a_search_reads_it_at_once_and_lists_its_listings(wallapop_sit
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert len(requests) == 1
+    # Newest first, then Wallapop's own order to show what is there.
+    assert [order(url) for url in requests] == ["newest", "most_relevance"]
     page = client.get("/market").text
     assert "Controle DualSense Edge para PS5" in page
     assert "ps5 · up to €300" in page
@@ -316,7 +322,8 @@ async def test_a_scheduled_run_reads_only_the_searches_that_are_due(db):
     requests = []
 
     def respond(request):
-        requests.append(dict(parse_qsl(request.url.query.decode()))["keywords"])
+        query = dict(parse_qsl(request.url.query.decode()))
+        requests.append((query["keywords"], query["order_by"]))
         return httpx.Response(200, text=SEARCH_JSON)
 
     provider = wallapop(db, respond)
@@ -332,8 +339,76 @@ async def test_a_scheduled_run_reads_only_the_searches_that_are_due(db):
                 ),
             ]
         )
-    service = MarketService(db, {"wallapop": provider}, NotificationService(db, None))
+    service = MarketService(
+        db, {"wallapop": provider}, NotificationService(db, SettingsService(db))
+    )
     await service.run()
-    assert requests == ["ps5"]
+    assert requests == [("ps5", "newest"), ("ps5", "most_relevance")]
     await service.run()
-    assert requests == ["ps5"]
+    assert requests == [("ps5", "newest"), ("ps5", "most_relevance")]
+
+
+@pytest.fixture
+def quiet_search(db):
+    """A search already read once that found nothing in Wallapop's last day, like zidoo."""
+    with db.session() as session:
+        row = MarketSearch(
+            provider="wallapop",
+            url="https://es.wallapop.com/search?keywords=zidoo",
+            label="zidoo",
+            last_read_at=now() - timedelta(hours=1),
+        )
+        session.add(row)
+    return row.id
+
+
+def answering(newest: dict, relevance: dict, requests: list):
+    def respond(request):
+        requests.append(order(request.url))
+        return httpx.Response(200, json=newest if order(request.url) == "newest" else relevance)
+
+    return respond
+
+
+async def test_a_search_with_nothing_yet_shows_what_wallapop_lists_now_without_alerting(
+    db, quiet_search
+):
+    requests = []
+    provider = wallapop(db, answering(NOTHING_JSON, json.loads(SEARCH_JSON), requests))
+    service = MarketService(
+        db, {"wallapop": provider}, NotificationService(db, SettingsService(db))
+    )
+    await service.run(force=True)
+    assert requests == ["newest", "most_relevance"]
+    assert set(rows(db)) == {"pj943gwle26e", "e65qx3nl7m6o", "wzvgwlo59qzl"}
+    assert not any(row.announced for row in rows(db).values())
+    assert alerts(db) == []
+    # Once it lists something, newest first is enough.
+    await service.run(force=True)
+    assert requests == ["newest", "most_relevance", "newest"]
+
+
+async def test_a_new_listing_is_announced_beside_what_wallapop_lists_now(db, quiet_search):
+    newest = json.loads(SEARCH_JSON)
+    newest["data"]["section"]["payload"]["items"] = newest["data"]["section"]["payload"]["items"][
+        :1
+    ]
+    relevance = json.loads(SEARCH_JSON)
+    provider = wallapop(db, answering(newest, relevance, []))
+    service = MarketService(
+        db, {"wallapop": provider}, NotificationService(db, SettingsService(db))
+    )
+    await service.run(force=True)
+    assert [event for event, _ in alerts(db)] == ["market_new"]
+    assert "Hellraiser Revival" in alerts(db)[0][1]
+    assert {key for key, row in rows(db).items() if row.announced} == {"pj943gwle26e"}
+    assert len(rows(db)) == 3
+
+
+def test_a_search_with_nothing_says_so_instead_of_blaming_the_filters(wallapop_site):
+    client, runtime, answer, _ = wallapop_site
+    answer["json"] = NOTHING_JSON
+    client.post("/market/searches", data=form_data(client, url=SEARCH_URL))
+    page = client.get("/market?search=1").text
+    assert "Nothing listed yet." in page
+    assert "Nothing matches." not in page

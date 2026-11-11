@@ -28,6 +28,10 @@ class Marketplace:
         """A short name for the search, e.g. "ps5 · €100–€300"."""
         raise NotImplementedError
 
-    async def fetch_listings(self, url: str) -> list[MarketItem]:
-        """The newest listings the search finds; raises unless the read worked."""
+    async def fetch_listings(self, url: str, *, newest: bool = True) -> list[MarketItem]:
+        """The newest listings the search finds; raises unless the read worked.
+
+        `newest=False` reads the marketplace's best matches whatever their age, as its own
+        site lists them: what is there now, for a search that has nothing yet.
+        """
         raise NotImplementedError

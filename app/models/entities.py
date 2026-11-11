@@ -288,7 +288,7 @@ class MarketSearch(Base):
     url: Mapped[str] = mapped_column(Text, unique=True)
     # What the search looks for, e.g. "ps5 · up to €300", from the link when it was added.
     label: Mapped[str] = mapped_column(String(200))
-    check_interval_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    check_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
     next_check_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     # The last successful read; None until the first one, which records without alerting.
     last_read_at: Mapped[datetime | None] = mapped_column(DateTime)

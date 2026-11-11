@@ -11,10 +11,10 @@ SEARCH_API = "https://api.wallapop.com/api/v3/search"
 API_HOSTS = ("api.wallapop.com",)
 # The web client names itself so; the search API answers it with JSON.
 API_HEADERS = {"Accept": "application/json", "X-DeviceOS": "0"}
-# Where Wallapop starts a search for a visitor without a location.
-MADRID = {"latitude": "40.41956", "longitude": "-3.69196"}
-# Order, paging and tracking are pricewatch's to set, not the pasted link's.
-OWN = {"order_by", "source", "search_id", "filters_source", "next_page", "step"}
+# Where a search starts when its link names no location: the owner's, Porto.
+PORTO = {"latitude": "41.14961", "longitude": "-8.61099"}
+# Order, paging, tracking and shipping are pricewatch's to set, not the pasted link's.
+OWN = {"order_by", "source", "search_id", "filters_source", "next_page", "step", "is_shippable"}
 CATEGORIES = ("category_id", "category_ids", "subcategory_ids", "object_type_ids")
 CHANGED = "Wallapop search response changed; provider update required"
 
@@ -70,17 +70,20 @@ class WallapopMarketplace(Marketplace):
         url = self.normalize_url(url)
         query = dict(parse_qsl(urlsplit(url).query))
         if not ("latitude" in query and "longitude" in query):
-            query.update(MADRID)
-        # One page, newest first: what arrived since the last read is at the top.
-        query.update(order_by="newest", source="search_box")
+            query.update(PORTO)
+        # One page, newest first: what arrived since the last read is at the top. Only
+        # listings that ship: most sellers are in Spain.
+        query.update(order_by="newest", source="search_box", is_shippable="true")
         raw = await self.fetcher.get(
             f"{SEARCH_API}?{urlencode(query)}", self.name, API_HOSTS, headers=API_HEADERS
         )
         try:
             items = json.loads(raw)["data"]["section"]["payload"]["items"]
-            return [self.listing(item, urlsplit(url).hostname) for item in items]
+            listings = [self.listing(item, urlsplit(url).hostname) for item in items]
         except (ValueError, TypeError, KeyError, AttributeError):
             raise ScrapeError(CHANGED) from None
+        # The API honours is_shippable; a listing it lets through anyway is still left out.
+        return [listing for listing in listings if listing.ships]
 
     def listing(self, item: dict, host: str) -> MarketItem:
         price, created = item.get("price") or {}, item.get("created_at")
@@ -96,5 +99,8 @@ class WallapopMarketplace(Marketplace):
             if isinstance(created, int | float)
             else None,
             reserved=(item.get("reserved") or {}).get("flag") is True,
-            ships=(item.get("shipping") or {}).get("user_allows_shipping") is True,
+            ships=all(
+                (item.get("shipping") or {}).get(key) is True
+                for key in ("item_is_shippable", "user_allows_shipping")
+            ),
         )

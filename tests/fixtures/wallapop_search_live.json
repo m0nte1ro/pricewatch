@@ -27,6 +27,7 @@
        "country_code": "ES"
       },
       "shipping": {
+       "item_is_shippable": true,
        "user_allows_shipping": true
       },
       "web_slug": "hellraiser-revival-day-one-edition-nuevo-precintad-1323061913",
@@ -54,6 +55,7 @@
        "country_code": "ES"
       },
       "shipping": {
+       "item_is_shippable": true,
        "user_allows_shipping": true
       },
       "web_slug": "mando-dualsense-edge-para-ps5-1323061800",
@@ -81,6 +83,7 @@
        "country_code": "ES"
       },
       "shipping": {
+       "item_is_shippable": true,
        "user_allows_shipping": true
       },
       "web_slug": "3-juegos-ps5-1323061641",

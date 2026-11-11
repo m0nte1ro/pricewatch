@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 def interval(form) -> int:
-    value = str(form.get("check_interval_minutes", "15")).strip()
+    value = str(form.get("check_interval_minutes", "60")).strip()
     if not value.isdigit() or not 5 <= int(value) <= 10080:
         raise HTTPException(422, "Check every 5 to 10080 minutes")
     return int(value)

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from urllib.parse import parse_qsl
 
@@ -13,8 +13,8 @@ from app.marketplaces.wallapop import CHANGED
 from app.models import Alert, MarketListing, MarketSearch
 from app.retailers.http import Fetcher
 from app.retailers.parsing import ScrapeError
-from app.schemas.domain import MarketItem, Preferences
-from app.services.market import Filters, apply
+from app.schemas.domain import MarketItem, Preferences, now
+from app.services.market import Filters, MarketService, apply
 from app.services.notifications import NotificationService
 from app.services.settings import SettingsService
 from tests.conftest import FIXTURES
@@ -69,9 +69,9 @@ def alerts(db) -> list[tuple[str, str]]:
         ]
 
 
-def test_a_wallapop_search_link_keeps_its_filters_and_drops_order_and_tracking():
+def test_a_wallapop_search_link_keeps_its_filters_and_drops_order_tracking_and_shipping():
     provider = wallapop()
-    url = "https://pt.wallapop.com/app/search?keywords=ps5&order_by=price_low_to_high&min_sale_price=100&latitude=38.72&longitude=-9.14&search_id=abc&utm_source=x"
+    url = "https://pt.wallapop.com/app/search?keywords=ps5&order_by=price_low_to_high&min_sale_price=100&latitude=38.72&longitude=-9.14&search_id=abc&utm_source=x&is_shippable=false"
     assert provider.normalize_url(url) == (
         "https://pt.wallapop.com/search?keywords=ps5&latitude=38.72&longitude=-9.14&min_sale_price=100"
     )
@@ -102,7 +102,9 @@ def test_only_known_marketplaces_are_followed():
         Marketplaces(Fetcher(None, None)).for_url("https://www.olx.pt/ads/q-ps5/")
 
 
-async def test_wallapop_is_read_newest_first_from_madrid_unless_the_link_says_where(db):
+async def test_wallapop_is_read_newest_first_shipping_only_from_porto_unless_the_link_says_where(
+    db,
+):
     requests = []
 
     def respond(request):
@@ -117,10 +119,11 @@ async def test_wallapop_is_read_newest_first_from_madrid_unless_the_link_says_wh
     assert sent == {
         "keywords": "ps5",
         "max_sale_price": "300",
-        "latitude": "40.41956",
-        "longitude": "-3.69196",
+        "latitude": "41.14961",
+        "longitude": "-8.61099",
         "order_by": "newest",
         "source": "search_box",
+        "is_shippable": "true",
     }
     await provider.fetch_listings(
         "https://pt.wallapop.com/search?keywords=ps5&latitude=38.72&longitude=-9.14"
@@ -160,6 +163,17 @@ async def test_a_changed_wallapop_answer_fails_the_read_instead_of_listing_nothi
     provider = wallapop(db, lambda request: httpx.Response(200, json={"data": {"items": []}}))
     with pytest.raises(ScrapeError, match=CHANGED):
         await provider.fetch_listings(SEARCH_URL)
+
+
+async def test_a_listing_that_does_not_ship_is_left_out(db):
+    answer = json.loads(SEARCH_JSON)
+    items = answer["data"]["section"]["payload"]["items"]
+    items[0]["shipping"]["user_allows_shipping"] = False
+    del items[1]["shipping"]["item_is_shippable"]
+    provider = wallapop(db, lambda request: httpx.Response(200, json=answer))
+    assert [item.listing_id for item in await provider.fetch_listings(SEARCH_URL)] == [
+        "wzvgwlo59qzl"
+    ]
 
 
 def test_the_first_read_records_listings_without_alerting(db, search):
@@ -260,6 +274,18 @@ def test_following_a_search_reads_it_at_once_and_lists_its_listings(wallapop_sit
     assert "already on the Marketplace tab" in again.text
 
 
+def test_a_search_is_checked_every_hour_unless_told_otherwise(wallapop_site):
+    client, runtime, _, requests = wallapop_site
+    client.post("/market/searches", data=form_data(client, url=SEARCH_URL))
+    with runtime.db.session() as session:
+        search = session.scalar(select(MarketSearch))
+    assert search.check_interval_minutes == 60
+    assert (
+        timedelta(minutes=57) <= search.next_check_at - search.last_read_at <= timedelta(minutes=63)
+    )
+    assert 'value="60"' in client.get("/market").text
+
+
 def test_a_link_from_an_unknown_marketplace_is_refused(wallapop_site):
     client, *_ = wallapop_site
     response = client.post(
@@ -284,3 +310,30 @@ def test_removing_a_search_forgets_its_listings_and_keeps_their_alerts(wallapop_
         alert = session.scalar(select(Alert))
         assert (alert.event_type, alert.market_listing_id) == ("market_new", None)
     assert "NEW ON WALLAPOP" in client.get("/alerts").text
+
+
+async def test_a_scheduled_run_reads_only_the_searches_that_are_due(db):
+    requests = []
+
+    def respond(request):
+        requests.append(dict(parse_qsl(request.url.query.decode()))["keywords"])
+        return httpx.Response(200, text=SEARCH_JSON)
+
+    provider = wallapop(db, respond)
+    with db.session() as session:
+        session.add_all(
+            [
+                MarketSearch(provider="wallapop", url=SEARCH_URL, label="ps5", next_check_at=now()),
+                MarketSearch(
+                    provider="wallapop",
+                    url="https://es.wallapop.com/search?keywords=zidoo",
+                    label="zidoo",
+                    next_check_at=now() + timedelta(minutes=30),
+                ),
+            ]
+        )
+    service = MarketService(db, {"wallapop": provider}, NotificationService(db, None))
+    await service.run()
+    assert requests == ["ps5"]
+    await service.run()
+    assert requests == ["ps5"]

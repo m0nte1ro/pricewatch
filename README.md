@@ -11,6 +11,7 @@ A self-hosted price monitor for a small homelab. Python 3.12+, FastAPI, SQLite, 
 - Scheduled checks, a history row on every successful check, Chart.js series/ranges, threshold/availability/discovery events, read state, and durable ntfy delivery retries.
 - Global, per-store and per-listing polling, store price rules, request settings, proxy and optional browser fallback through the UI.
 - An **Outlet** tab that follows whole outlet or category pages (Worten for now): every product with its price, kept as **Out of stock** when it leaves the page, a bell per product, and name alerts for new arrivals.
+- A **Marketplace** tab that follows second-hand searches (Wallapop for now): every new listing a search finds is pushed through ntfy, and tapping the notification opens it.
 - Local frontend assets, SQLite migrations, structured logs, Docker Compose deployment, online backups, and fixture-backed tests.
 
 ## Retailer coverage
@@ -164,6 +165,8 @@ app/
   services/       Use cases: discovery, matching, monitoring, alerts, queries
     outlet.py     Outlet pages: read, fold into products, bell and name alerts
     rules.py      Per-store price rules taught by confirming a price
+    market.py     Marketplace searches: read, fold in new listings, push them
+  marketplaces/   Second-hand marketplace providers (Wallapop) and their registry
   retailers/      Isolated storefront adapters, registry, parsing and HTTP I/O
     generic.py    Reader for any other public store: rule, structured data, meta tags, heuristic
   notifications/  Provider contract and ntfy implementation
@@ -232,6 +235,22 @@ The **Outlet** tab follows whole store pages, such as `https://www.worten.pt/out
 Outlet events (`outlet new`, `outlet back`, `outlet price drop`, `outlet out of stock`) appear in Activity, linked to the product's row; only `outlet new` and `outlet out of stock` are pushed through ntfy. Removing a page deletes its products and their price changes; their events stay in Activity. Outlet pages are not part of the watchlist export.
 
 Pages are read by the store's adapter (`fetch_feed`). Worten's page sends no products in its HTML: its script asks the storefront search API for the category the page names, 48 at a time, then the flags API for each card's flags (quoting the page's grid module, context key and path), and pricewatch does the same. If the flags can't be read, the whole read fails rather than show prices without their coupons. Other stores answer "Outlet pages from this store aren't supported yet".
+
+## Marketplace
+
+The **Marketplace** tab follows searches on second-hand marketplaces (Wallapop for now) and tells you about every new listing. Search on Wallapop with the filters you want (keywords, price range, category, location, distance), copy the address (`https://es.wallapop.com/search?keywords=ps5&max_sale_price=300`; `pt.` and `it.` work too) and paste it under **Searches**. It is read straight away and then every hour (5–10080 minutes, per search, ±5% jitter) on the same scheduler, request pacing and cooldowns as the watchlist. **Check now** reads every search at once.
+
+- Each read asks Wallapop's search API for the newest listings (one page, about 40) with the link's own filters. The link's sort order is ignored: listings are always read newest first. Only listings that ship are read (Wallapop's own "shipping" filter, and any listing it lets through without shipping is dropped), because most sellers are in Spain. A link without a location searches from Porto; Wallapop's newest-first results cover the last 24 hours, so a search must be read at least once a day not to miss a listing.
+- Wallapop's newest-first results only cover the last 24 hours, so while a search has no listings, each read also reads Wallapop's own order (relevance, any age, as its site shows it) to fill the table with what is there now. Those are recorded without alerting.
+- The first read records what is already there without alerting. After that, every listing the search has not seen before is pushed as **market new** ("NEW ON WALLAPOP · title · price · city · search"); tapping the ntfy notification opens the listing.
+- **Send a test ping** on a search sends its newest listing to ntfy straight away, exactly as a new one would arrive but marked "TEST", and says whether ntfy took it (no topic set, ntfy refusing the topic or token, or the server unreachable). The test is not recorded in Activity.
+- **Listings** is one table, newest posted first: photo, title (opens the listing), the seller's city, price ("Down from …" when the seller lowered it), the search that found it, and when it was posted. Click **Price** to sort by price. Reserved listings are greyed and badged. New marks listings announced in the last two days. A listing two searches find shows once.
+- Search and filters narrow the table as you type: words in the title, one search, a maximum price, new only, hide reserved. They live in the address.
+- Each search keeps its 500 most recent listings; older ones are forgotten (their events stay in Activity). Sold listings simply stop appearing in results, so the tab does not track stock. A search that gets more than one page of new listings between reads misses the rest: narrow it or read it more often.
+
+Removing a search deletes its listings; their events stay in Activity. Searches are not part of the watchlist export.
+
+Providers live in `app/marketplaces/`. To add one (OLX, for example), subclass `Marketplace` with its `name`, `label`, the `hosts` of its search pages and an `example` link; implement `normalize_url` (accept only search links, drop sorting and tracking), `describe` (a short name such as "ps5 · up to €300") and `fetch_listings` (the newest listings as `MarketItem`s, raising `ScrapeError` unless the read worked), then register the class in `Marketplaces`. Requests go through the shared `Fetcher`, so pacing, cooldowns and the 403/429 handling apply unchanged.
 
 ## Configuration and ntfy
 

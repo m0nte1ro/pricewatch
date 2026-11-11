@@ -9,7 +9,9 @@ class NtfyProvider:
     def __init__(self, preferences: Preferences, *, transport=None):
         self.preferences, self.transport = preferences, transport
 
-    async def send(self, title: str, message: str, urgent: bool = False) -> None:
+    async def send(
+        self, title: str, message: str, urgent: bool = False, click: str | None = None
+    ) -> None:
         prefs = self.preferences
         parsed = urlsplit(prefs.ntfy_url)
         if (
@@ -32,6 +34,8 @@ class NtfyProvider:
                     "title": title,
                     "message": message,
                     "priority": 5 if urgent else 3,
+                    # Tapping the notification opens this page.
+                    **({"click": click} if click else {}),
                 },
             )
             response.raise_for_status()

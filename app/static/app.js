@@ -35,7 +35,7 @@ document.addEventListener('htmx:responseError', event => {
 // Filters left blank stay out of the request, so the pushed URL reads like the page's own links.
 document.addEventListener('htmx:configRequest', event => {
   const data = event.detail.formData;
-  if (event.detail.elt.id !== 'outlet-filters' || !data) return;
+  if (!['outlet-filters', 'market-filters'].includes(event.detail.elt.id) || !data) return;
   [...new Set(data.keys())].filter(key => data.getAll(key).every(value => value === '')).forEach(key => data.delete(key));
 });
 // The Filters dropdown closes on a click elsewhere or Escape, like a menu.

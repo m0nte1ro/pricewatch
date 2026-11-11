@@ -5,11 +5,13 @@ from datetime import timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
+from app.marketplaces.registry import Marketplaces
 from app.models import DiscoveryDraft
 from app.retailers.http import Fetcher
 from app.retailers.registry import Registry
 from app.schemas.domain import now
 from app.services.discovery import DiscoveryService
+from app.services.market import MarketService
 from app.services.monitoring import MonitoringService
 from app.services.notifications import NotificationService
 from app.services.outlet import OutletService
@@ -27,10 +29,12 @@ class Runtime:
         self.fetcher = Fetcher(db, self.settings.get, profile_dir=config.data_dir / "browser")
         self.rules = RuleService(db)
         self.registry = Registry(self.fetcher, self.rules)
+        self.marketplaces = Marketplaces(self.fetcher)
         self.notifications = NotificationService(db, self.settings)
         self.discovery = DiscoveryService(db, self.registry, self.settings)
         self.monitor = MonitoringService(db, self.registry, self.settings, self.notifications)
         self.outlet = OutletService(db, self.registry, self.notifications)
+        self.market = MarketService(db, self.marketplaces, self.notifications)
         self.queries = QueryService(db)
         self.tasks: set[asyncio.Task] = set()
         self.scheduler = AsyncIOScheduler(timezone="UTC")
@@ -74,8 +78,12 @@ class Runtime:
             self.scheduler.start()
 
     async def tick(self):
-        # Both share the fetcher, so a store's pacing and cooldown hold across them.
-        await asyncio.gather(self.spawn(self.monitor.run()), self.spawn(self.outlet.run()))
+        # They share the fetcher, so a store's pacing and cooldown hold across them.
+        await asyncio.gather(
+            self.spawn(self.monitor.run()),
+            self.spawn(self.outlet.run()),
+            self.spawn(self.market.run()),
+        )
 
     async def close(self):
         if self.scheduler.running:

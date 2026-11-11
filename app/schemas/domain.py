@@ -106,6 +106,29 @@ class FeedItem(BaseModel):
         return value.quantize(Decimal("0.01")) if value is not None else None
 
 
+class MarketItem(BaseModel):
+    """One listing a marketplace search returns."""
+
+    listing_id: str
+    title: str
+    url: str
+    price: Decimal | None = None
+    image_url: str | None = None
+    # Where the seller is, as the marketplace names it ("Barcelona").
+    place: str | None = None
+    posted_at: datetime | None = None
+    # Promised to a buyer, not sold yet.
+    reserved: bool = False
+    ships: bool = False
+
+    @field_validator("price")
+    @classmethod
+    def valid_money(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and (not value.is_finite() or value <= 0):
+            raise ValueError("Price must be a positive finite amount")
+        return value.quantize(Decimal("0.01")) if value is not None else None
+
+
 class PriceRule(BaseModel):
     price_selector: str
     availability_selector: str | None = None
